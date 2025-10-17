@@ -1,6 +1,5 @@
 # src/Engine/CMakeLists.txt
 
-# Build the Engine library
 add_library(Engine
         core.cpp
         vec2.cpp
@@ -10,22 +9,25 @@ add_library(Engine
         collision.cpp
         scaling.cpp
         timeline.cpp
-        client.cpp
+        client.cpp         # <-- your fixed file
         server.cpp
         Networking.cpp
         JobSystem.cpp
         NetProtocol.hpp
 )
 
-# Use the KEYWORD signature (fixes the mixed-signature error)
 target_link_libraries(Engine
         PUBLIC
         SDL3::SDL3
         SDL3_image::SDL3_image
 )
 
-# Make headers available to dependents with "Engine/..." includes.
-# Since you include "Engine/Net/Client.h" from outside, expose the project src/ path.
+# Winsock for Windows builds (ntohs/inet_pton/etc.)
+if (WIN32)
+    target_link_libraries(Engine PUBLIC ws2_32)
+endif()
+
+# Make headers visible as "Engine/..."
 target_include_directories(Engine
         PUBLIC
         ${PROJECT_SOURCE_DIR}/src

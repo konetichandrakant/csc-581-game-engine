@@ -1,1 +1,4 @@
-build
+cmake-build-debug
+/src/client_main.cpp
+/src/server_main.cpp
+/media

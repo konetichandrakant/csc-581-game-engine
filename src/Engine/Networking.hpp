@@ -6,18 +6,18 @@
 #include <unordered_map>
 #include <vector>
 #include <chrono>
-#include <zmq.h> // C API used via simple wrappers for minimal deps
+#include <zmq.h>
 #include "SharedData.hpp"
 
-namespace Engine { namespace Net {
+namespace Engine {
 
 using Clock = std::chrono::steady_clock;
 
 struct ServerConfig {
-    // map client_id -> port
-    std::vector<std::pair<uint32_t,int>> clients; // e.g., {{1,6001},{2,6002},{3,6003}}
+
+    std::vector<std::pair<uint32_t,int>> clients;
     double world_hz = 60.0;
-    // Platform seed
+
     struct PlatformSeed { uint32_t id; float x, y, minX, maxX, speed; int dir; };
     std::vector<PlatformSeed> platforms;
 };
@@ -76,7 +76,6 @@ private:
 
 class Client {
 public:
-    // host e.g., "127.0.0.1", port e.g., 6001
     Client(const std::string& host, int port, uint32_t my_id);
     ~Client();
 
@@ -90,4 +89,4 @@ private:
     void* req{nullptr};
 };
 
-}} // namespace Engine::Net
+}

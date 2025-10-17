@@ -2,7 +2,7 @@
 #include <cstdint>
 #include <cstring>
 
-namespace Engine { namespace Net {
+namespace Engine {
 
     constexpr uint32_t PROTO_VER = 1;
     constexpr uint32_t MAX_PLAYERS = 8;
@@ -66,4 +66,4 @@ namespace Engine { namespace Net {
         }
     };
 
-}} // namespace Engine::Net
+} // namespace Engine::Net

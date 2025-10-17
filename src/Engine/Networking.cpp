@@ -24,7 +24,7 @@ static int   recv_buf(void* sock, void* out, size_t n){
     return zmq_recv(sock, out, n, 0); // blocks
 }
 
-namespace Engine { namespace Net {
+namespace Engine {
 
 //==================== Server ====================
 
@@ -221,4 +221,4 @@ bool Client::exchange(bool left, bool right, bool jump, float dt_client, StateMs
     return n == (int)sizeof(out) && out.kind == MsgKind::State && out.proto_ver == PROTO_VER;
 }
 
-}} // namespace Engine::Net
+}
