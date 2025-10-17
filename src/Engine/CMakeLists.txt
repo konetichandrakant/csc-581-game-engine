@@ -14,6 +14,16 @@ add_library(Engine
         Networking.cpp
         JobSystem.cpp
         NetProtocol.hpp
+
+        object/Types.hpp
+        object/Component.hpp
+        object/GameObject.hpp
+        object/GameObject.cpp
+        object/Registry.hpp
+        object/Registry.cpp
+        object/components/Transform.hpp
+        object/components/Sprite.hpp
+        object/components/PhysicsBody2D.hpp
 )
 
 target_link_libraries(Engine
