@@ -15,6 +15,22 @@ add_library(Engine
         Networking.cpp
         JobSystem.cpp
         NetProtocol.hpp
+        object/Types.hpp
+        object/Component.hpp
+        object/GameObject.hpp
+        object/GameObject.cpp
+        object/Registry.hpp
+        object/Registry.cpp
+        object/NetworkSceneManager.hpp
+        object/NetworkSceneManager.cpp
+        object/components/Transform.hpp
+        object/components/Sprite.hpp
+        object/components/PhysicsBody2D.hpp
+        object/components/NetworkPlayer.hpp
+        object/PerformanceTest.hpp
+        object/PerformanceTest.cpp
+        object/InputDeltaNetwork.hpp
+        object/InputDeltaNetwork.cpp
 )
 
 # Use the KEYWORD signature (fixes the mixed-signature error)
