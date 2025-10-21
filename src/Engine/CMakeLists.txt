@@ -31,6 +31,8 @@ add_library(Engine
         object/PerformanceTest.cpp
         object/InputDeltaNetwork.hpp
         object/InputDeltaNetwork.cpp
+        object/components/platform_motion.h
+        camera.h
 )
 
 # Use the KEYWORD signature (fixes the mixed-signature error)
