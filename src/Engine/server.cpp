@@ -7,11 +7,7 @@
 #include <cstring>
 #include <iostream>
 #include <vector>
-#ifdef _WIN32
 #include <winsock2.h> // Windows socket library
-#else
-#include <arpa/inet.h>
-#endif
 
 namespace {
 #pragma pack(push,1)
