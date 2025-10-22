@@ -1,4 +1,3 @@
-// server_main.cpp — world PUB + hello REP + directory REP (no perf header)
 #include <cstdlib>
 #include <cstdint>
 #include <unordered_map>
@@ -53,7 +52,6 @@ struct DynPlatform {
 };
 struct ClientConn { uint16_t port_be{0}; std::chrono::steady_clock::time_point lastSeen; };
 
-// Configuration variables
 static int gNumMovers = 2;
 static int gNumVertical = 1;
 static bool gEnablePerformanceTracking = false;
@@ -63,7 +61,7 @@ static double gDisconnectTimeoutSeconds = 5.0;
 static std::atomic<bool> running{true};
 static void on_sigint(int){ running.store(false); }
 
-// ---------- world publisher ----------
+// Publish moving platform positions to all clients
 static void world_pub(void* ctx) {
     void* pub = zmq_socket(ctx, ZMQ_PUB);
     int linger=0, one=1; zmq_setsockopt(pub, ZMQ_LINGER, &linger, sizeof(linger));
@@ -71,26 +69,22 @@ static void world_pub(void* ctx) {
     if (zmq_bind(pub, WORLD_ENDPOINT)!=0) { std::cerr << "[world] bind failed: " << zmq_strerror(zmq_errno()) << "\n"; zmq_close(pub); return; }
     std::cout << "[world] PUB @ 5556\n";
 
-    // Create configurable horizontal and vertical movers
     std::vector<DynPlatform> plats;
     float left=120.f, right=float(SCREEN_W-320);
 
-    // Add horizontal movers (purple platform and hand)
     if (gNumMovers >= 1) {
-        plats.push_back({ 200.f, float(SCREEN_H- 520), +220.f, 0.f, left, right, 0, 0, 300.f, 80.f, false});  // purple mid
+        plats.push_back({ 200.f, float(SCREEN_H- 520), +220.f, 0.f, left, right, 0, 0, 300.f, 80.f, false});
     }
     if (gNumMovers >= 2) {
-        plats.push_back({ right, float(SCREEN_H- 200 - 64), -260.f, 0.f, 10.f, float(SCREEN_W-90), 0, 0, 64.f,64.f, false}); // hand
+        plats.push_back({ right, float(SCREEN_H- 200 - 64), -260.f, 0.f, 10.f, float(SCREEN_W-90), 0, 0, 64.f,64.f, false});
     }
 
-    // Add additional horizontal movers if requested
     for (int i = 2; i < gNumMovers; i++) {
         float speed = 150.f + (i * 30.f);
         float y = float(SCREEN_H - 300 - (i * 80));
         plats.push_back({ left + (i * 100), y, speed, 0.f, left, right - (i * 50), 0, 0, 250.f, 60.f, false });
     }
 
-    // Add vertical movers if requested
     for (int i = 0; i < gNumVertical; i++) {
         float speed = 180.f + (i * 40.f);
         float x = 800.f + (i * 200);
@@ -110,12 +104,10 @@ static void world_pub(void* ctx) {
             double ds = dtSim.count();
             for (auto& p: plats) {
                 if (p.is_vertical) {
-                    // Vertical movement
                     p.y += p.vy*ds;
                     if (p.y < p.minY) { p.y=p.minY; p.vy= std::abs(p.vy); }
                     if (p.y + p.h > p.maxY) { p.y=p.maxY - p.h; p.vy= -std::abs(p.vy); }
                 } else {
-                    // Horizontal movement
                     p.x += p.vx*ds;
                     if (p.x < p.minX) { p.x=p.minX; p.vx= std::abs(p.vx); }
                     if (p.x + p.w > p.maxX) { p.x=p.maxX - p.w; p.vx= -std::abs(p.vx); }
@@ -142,7 +134,7 @@ static void world_pub(void* ctx) {
     zmq_close(pub);
 }
 
-// ---------- hello/ID ----------
+// Handle client hello requests and assign unique player IDs
 static void hello_rep(void* ctx) {
     void* rep = zmq_socket(ctx, ZMQ_REP);
     int linger=0; zmq_setsockopt(rep, ZMQ_LINGER, &linger, sizeof(linger));
@@ -165,7 +157,7 @@ static void hello_rep(void* ctx) {
     zmq_close(rep);
 }
 
-// ---------- directory (P2P peer list) ----------
+// Manage P2P peer directory and handle client discovery
 static void directory_rep(void* ctx) {
     void* rep = zmq_socket(ctx, ZMQ_REP);
     int linger=0; zmq_setsockopt(rep, ZMQ_LINGER, &linger, sizeof(linger));
@@ -181,9 +173,9 @@ static void directory_rep(void* ctx) {
             const auto TO=std::chrono::seconds(static_cast<int>(gDisconnectTimeoutSeconds));
             std::vector<int32_t> dead;
             for (auto& [id,cc]:peers) if (now-cc.lastSeen>TO) dead.push_back(id);
-            for (auto id:dead) { 
-                peers.erase(id); 
-                std::cout << "[dir] pruned disconnected client " << id << "\n"; 
+            for (auto id:dead) {
+                peers.erase(id);
+                std::cout << "[dir] pruned disconnected client " << id << "\n";
             }
             std::this_thread::sleep_for(std::chrono::seconds(1));
         }
@@ -199,7 +191,7 @@ static void directory_rep(void* ctx) {
 
             std::vector<PeerInfo> list;
             for (auto& [pid,ppi] : peers) if (pid!=id) {
-                uint32_t loopback = htonl(0x7F000001); // 127.0.0.1
+                uint32_t loopback = htonl(0x7F000001);
                 list.push_back({pid, loopback, ppi.port_be});
             }
 
@@ -218,6 +210,7 @@ static void directory_rep(void* ctx) {
     zmq_close(rep);
 }
 
+// Parse command line arguments for server configuration
 static void parseArguments(int argc, char* argv[]) {
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--movers") == 0 && i + 1 < argc) {
@@ -244,6 +237,7 @@ static void parseArguments(int argc, char* argv[]) {
     }
 }
 
+// Main server entry point - initialize networking and start service threads
 int main(int argc, char* argv[]) {
 #ifdef _WIN32
     WSADATA w; if (WSAStartup(MAKEWORD(2,2), &w)!=0) { std::cerr << "WSAStartup failed\n"; return 1; }
@@ -253,7 +247,7 @@ int main(int argc, char* argv[]) {
     std::signal(SIGINT, on_sigint);
     std::cout << "Game Server starting… ports: 5555 (hello), 5556 (world), 5557 (dir)\n";
     std::cout << "Configuration: " << gNumMovers << " horizontal movers, " << gNumVertical << " vertical movers\n";
-    std::cout << "Features: Performance tracking=" << (gEnablePerformanceTracking ? "ON" : "OFF") 
+    std::cout << "Features: Performance tracking=" << (gEnablePerformanceTracking ? "ON" : "OFF")
               << ", Disconnect handling=" << (gEnableDisconnectHandling ? "ON" : "OFF")
               << ", Timeout=" << gDisconnectTimeoutSeconds << "s\n";
 
