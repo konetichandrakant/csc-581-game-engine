@@ -6,7 +6,12 @@
 #include <thread>
 #include <iostream>
 #include <cctype>
+#include <vector>
+#ifdef _WIN32
+#include <winsock2.h> // Windows socket library
+#else
 #include <arpa/inet.h> // ntohs
+#endif
 
 namespace {
 

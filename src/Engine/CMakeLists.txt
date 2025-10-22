@@ -42,6 +42,11 @@ target_link_libraries(Engine
         SDL3_image::SDL3_image
 )
 
+# Windows-specific libraries
+if(WIN32)
+    target_link_libraries(Engine PUBLIC ws2_32)
+endif()
+
 # Make headers available to dependents with "Engine/..." includes.
 # Since you include "Engine/Net/Client.h" from outside, expose the project src/ path.
 target_include_directories(Engine
