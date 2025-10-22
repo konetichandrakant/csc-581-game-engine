@@ -29,8 +29,6 @@ add_library(Engine
         object/components/NetworkPlayer.hpp
         object/PerformanceTest.hpp
         object/PerformanceTest.cpp
-        object/InputDeltaNetwork.hpp
-        object/InputDeltaNetwork.cpp
         object/components/platform_motion.h
         camera.h
 )

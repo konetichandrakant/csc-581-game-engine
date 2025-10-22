@@ -56,6 +56,9 @@ struct ClientConn { uint16_t port_be{0}; std::chrono::steady_clock::time_point l
 // Configuration variables
 static int gNumMovers = 2;
 static int gNumVertical = 1;
+static bool gEnablePerformanceTracking = false;
+static bool gEnableDisconnectHandling = true;
+static double gDisconnectTimeoutSeconds = 5.0;
 
 static std::atomic<bool> running{true};
 static void on_sigint(int){ running.store(false); }
@@ -175,11 +178,14 @@ static void directory_rep(void* ctx) {
     std::thread janitor([&](){
         while (running.load()) {
             auto now=std::chrono::steady_clock::now();
-            const auto TO=std::chrono::seconds(15);
+            const auto TO=std::chrono::seconds(static_cast<int>(gDisconnectTimeoutSeconds));
             std::vector<int32_t> dead;
             for (auto& [id,cc]:peers) if (now-cc.lastSeen>TO) dead.push_back(id);
-            for (auto id:dead) { peers.erase(id); std::cout << "[dir] pruned " << id << "\n"; }
-            std::this_thread::sleep_for(std::chrono::seconds(5));
+            for (auto id:dead) { 
+                peers.erase(id); 
+                std::cout << "[dir] pruned disconnected client " << id << "\n"; 
+            }
+            std::this_thread::sleep_for(std::chrono::seconds(1));
         }
     });
 
@@ -218,11 +224,20 @@ static void parseArguments(int argc, char* argv[]) {
             gNumMovers = std::max(1, std::min(20, atoi(argv[++i])));
         } else if (strcmp(argv[i], "--vertical") == 0 && i + 1 < argc) {
             gNumVertical = std::max(0, std::min(10, atoi(argv[++i])));
+        } else if (strcmp(argv[i], "--performance-tracking") == 0) {
+            gEnablePerformanceTracking = true;
+        } else if (strcmp(argv[i], "--disconnect-handling") == 0) {
+            gEnableDisconnectHandling = true;
+        } else if (strcmp(argv[i], "--disconnect-timeout") == 0 && i + 1 < argc) {
+            gDisconnectTimeoutSeconds = std::max(1.0, std::min(60.0, atof(argv[++i])));
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             std::cout << "Usage: " << argv[0] << " [options]\n";
             std::cout << "Options:\n";
             std::cout << "  --movers N        Number of horizontal moving platforms (1-20, default: 2)\n";
             std::cout << "  --vertical N      Number of vertical moving platforms (0-10, default: 1)\n";
+            std::cout << "  --performance-tracking Enable performance tracking\n";
+            std::cout << "  --disconnect-handling Enable disconnect handling\n";
+            std::cout << "  --disconnect-timeout SEC Disconnect timeout in seconds (default: 5.0)\n";
             std::cout << "  --help, -h        Show this help\n";
             exit(0);
         }
@@ -238,6 +253,9 @@ int main(int argc, char* argv[]) {
     std::signal(SIGINT, on_sigint);
     std::cout << "Game Server starting… ports: 5555 (hello), 5556 (world), 5557 (dir)\n";
     std::cout << "Configuration: " << gNumMovers << " horizontal movers, " << gNumVertical << " vertical movers\n";
+    std::cout << "Features: Performance tracking=" << (gEnablePerformanceTracking ? "ON" : "OFF") 
+              << ", Disconnect handling=" << (gEnableDisconnectHandling ? "ON" : "OFF")
+              << ", Timeout=" << gDisconnectTimeoutSeconds << "s\n";
 
     void* ctx = zmq_ctx_new();
     if (!ctx) { std::cerr << "zmq_ctx_new failed\n"; return 1; }
