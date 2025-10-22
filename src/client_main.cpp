@@ -43,7 +43,8 @@ static inline int64_t nowNanos() {
 
 // ---------- your game objects / names ----------
 Engine::Entity* player_character = nullptr;
-Engine::Entity* hazard_object    = nullptr; // hand "arm"
+Engine::Entity* hazard_object    = nullptr; // hand "arm" (horizontal)
+Engine::Entity* hazard_object_v  = nullptr; // hand "arm" (vertical)
 Engine::Entity* floor_base       = nullptr;
 Engine::Entity* side_platform    = nullptr;
 Engine::Entity* tombstone        = nullptr;
@@ -61,6 +62,11 @@ static std::unordered_map<int, SurfaceAttachment> remote_attachments;
 static float HAZARD_LEFT=0.f, HAZARD_RIGHT=0.f, HAZARD_LEVEL=0.f;
 static float hazard_velocity=60.f;
 static bool  hazard_direction_left=true;
+
+// Vertical hand parameters
+static float V_MIN=0.f, V_MAX=0.f;
+static float vSpeed=140.f;
+static bool  vDown=true;
 
 static const float GHOST_SCALE = 0.28f;
 static const float EDGE_PADDING = 40.0f;
@@ -130,14 +136,18 @@ struct DeathZone {
 };
 static std::vector<DeathZone> gDeathZones;
 
-// Side-scrolling boundary
+// ---- scrolling toggle (OFF) ----
+static constexpr bool kEnableScrolling = false;  // set true to re-enable later
+
+// Side-scrolling boundary (only used if kEnableScrolling is true)
 struct ScrollBoundary {
     SDL_FRect bounds;
     Engine::Obj::ObjectId id;
 };
 static ScrollBoundary gTopBoundary;
-static float gScrollOffset = 0;
 static bool gScrolling = false;
+static float gScrolledDistance = 0.0f;    // accumulated positive distance
+static float gScrollCooldown = 0.0f;     // debounce to prevent re-trigger
 
 static SDL_Texture* loadTexture(const char* path) {
     SDL_Texture* tx = IMG_LoadTexture(Engine::renderer, path);
@@ -239,12 +249,12 @@ static void translateWorld(float dy) {
     if (main_platform) main_platform->translate(0, dy);
     if (tombstone) tombstone->translate(0, dy);
     if (hazard_object) hazard_object->translate(0, dy);
+    if (hazard_object_v) hazard_object_v->translate(0, dy);
     if (player_character) player_character->translate(0, dy);
 
     // Update spawn points and death zones
     for (auto& sp : gSpawnPoints) { sp.y += dy; }
     for (auto& dz : gDeathZones) { dz.bounds.y += dy; }
-    gScrollOffset += dy;
 }
 
 static double runPerformanceTest(int frames) {
@@ -304,13 +314,32 @@ static void initializeGameWorld() {
         player_character->setMaxSpeed(420.0f, 750.0f);
     }
 
-    // hand hazard
+    // hand hazard (horizontal)
     if (SDL_Texture* src = loadTexture("media/hand.png")) {
         SDL_Texture* tx = resizeTexture(src, int(256*GHOST_SCALE), int(256*GHOST_SCALE));
         SDL_DestroyTexture(src);
         hazard_object = new Engine::Entity(tx);
         hazard_object->setGravity(false);
         hazard_object->setPhysics(false);
+    }
+
+    // hand hazard (vertical) - second hand moving in center
+    if (SDL_Texture* src2 = loadTexture("media/hand.png")) {
+        SDL_Texture* tx2 = resizeTexture(src2, int(256*GHOST_SCALE), int(256*GHOST_SCALE));
+        SDL_DestroyTexture(src2);
+        hazard_object_v = new Engine::Entity(tx2);
+        hazard_object_v->setGravity(false);
+        hazard_object_v->setPhysics(false);
+
+        // Position at center of screen, vertical movement in middle portion
+        const float handW = hazard_object_v->getWidth();
+        const float handH = hazard_object_v->getHeight();
+        float cx = Engine::WINDOW_WIDTH * 0.5f - handW * 0.5f;
+
+        V_MIN = Engine::WINDOW_HEIGHT * 0.25f;
+        V_MAX = Engine::WINDOW_HEIGHT * 0.75f - handH;
+
+        hazard_object_v->setPos(cx, V_MIN);  // start at top of its range
     }
 
     // platforms
@@ -355,7 +384,7 @@ static void initializeGameWorld() {
     // Initialize game component systems
     createSpawnPoints();
     createDeathZones();
-    createScrollBoundary();
+    if constexpr (kEnableScrolling) createScrollBoundary();
 
     resetPlayerPosition();
 }
@@ -426,9 +455,9 @@ static void worldWorker() {
         for (int i=0;i<run;i++) {
             t += dt;
 
-            // server-authoritative: [0]=purple, [1]=hand
+            // server-authoritative: [0]=purple, [1]=hand horizontal, [2]=hand vertical
             auto srv = network_client.platforms();
-            if (srv.size()>=2) {
+            if (srv.size()>=3) {
                 float a = std::min(1.0f, gPeerLerp*dt);
                 if (main_platform) {
                     float cx=main_platform->getPosX(), cy=main_platform->getPosY();
@@ -438,13 +467,27 @@ static void worldWorker() {
                     float hx=hazard_object->getPosX();
                     hazard_object->setPos(hx + (srv[1].x - hx)*a, srv[1].y);
                 }
+                if (hazard_object_v) {
+                    float hx=hazard_object_v->getPosX();
+                    float hy=hazard_object_v->getPosY();
+                    hazard_object_v->setPos(hx + (srv[2].x - hx)*a, hy + (srv[2].y - hy)*a);
+                }
             } else if (hazard_object) {
-                // offline fallback
+                // offline fallback for horizontal hand
                 float x = hazard_object->getPosX();
                 x += (hazard_direction_left?-hazard_velocity:hazard_velocity)*dt;
                 if (x<=HAZARD_LEFT){x=HAZARD_LEFT;hazard_direction_left=false;}
                 if (x>=HAZARD_RIGHT){x=HAZARD_RIGHT;hazard_direction_left=true;}
                 hazard_object->setPos(x, HAZARD_LEVEL);
+
+                // offline fallback for vertical hand
+                if (hazard_object_v) {
+                    float y = hazard_object_v->getPosY();
+                    y += (vDown ? vSpeed : -vSpeed) * dt;
+                    if (y < V_MIN) { y = V_MIN; vDown = true; }
+                    if (y > V_MAX) { y = V_MAX; vDown = false; }
+                    hazard_object_v->setPos(hazard_object_v->getPosX(), y);
+                }
             }
 
             // buffer peer snapshots
@@ -503,7 +546,9 @@ static void update(float dt) {
 
     // Check death zones and hazard collision
     SDL_FRect pb = player_character->getBoundingBox();
-    if (isDead(pb) || (hazard_object && Engine::Collision::check(player_character, hazard_object))) {
+    if (isDead(pb) ||
+        (hazard_object && Engine::Collision::check(player_character, hazard_object)) ||
+        (hazard_object_v && Engine::Collision::check(player_character, hazard_object_v))) {
         respawnAtCurrent();
     }
 
@@ -604,18 +649,32 @@ static void update(float dt) {
         }
     }
 
-    // Side-scrolling logic
-    if (!gScrolling && player_character->getBoundingBox().y <= gTopBoundary.bounds.y + gTopBoundary.bounds.h) {
-        gScrolling = true;
-    }
+    // --- side-scrolling (disabled by default) ---
+    if constexpr (kEnableScrolling) {
+        // Update scroll cooldown
+        if (gScrollCooldown > 0.0f) {
+            gScrollCooldown = std::max(0.0f, gScrollCooldown - (float)gTimeline.getDelta());
+        }
 
-    if (gScrolling) {
-        float scrollSpeed = 200.0f * dt;  // 200 pixels per second
-        translateWorld(-scrollSpeed);
+        // Side-scrolling logic - start scroll when player touches boundary
+        if (!gScrolling && gScrollCooldown <= 0.0f &&
+            player_character->getBoundingBox().y <= gTopBoundary.bounds.y + gTopBoundary.bounds.h) {
+            gScrolling = true;
+            gScrolledDistance = 0.0f;
+            gScrollCooldown = 0.35f;  // prevent immediate re-trigger
+        }
 
-        // Stop scrolling after one screen height
-        if (gScrollOffset <= -Engine::WINDOW_HEIGHT) {
-            gScrolling = false;
+        if (gScrolling) {
+            const float scrollSpeed = 200.0f;  // 200 pixels per second
+            float step = scrollSpeed * dt;
+            translateWorld(-step);
+            gScrolledDistance += step;
+
+            // Stop scrolling after exactly one screen height
+            if (gScrolledDistance >= (float)Engine::WINDOW_HEIGHT) {
+                gScrolling = false;
+                gScrolledDistance = 0.0f;
+            }
         }
     }
 
@@ -627,6 +686,7 @@ static void update(float dt) {
         if (tombstone)     tombstone->draw();
         for (auto& [id,op] : other_players) if (op.avatar && op.connected) op.avatar->draw();
         if (hazard_object) hazard_object->draw();
+        if (hazard_object_v) hazard_object_v->draw();
         if (player_character) player_character->draw();
     }
 
