@@ -45,8 +45,17 @@ struct PeerInfo { int32_t id; uint32_t ipv4_be; uint16_t port_be; };
 struct PeerList { P2PHeader h{P2PKind::PeerList,0}; int32_t my_id; uint32_t count; };
 #pragma pack(pop)
 
-struct DynPlatform { float x,y; float vx; float minX,maxX; float w,h; };
+struct DynPlatform {
+    float x,y; float vx,vy;
+    float minX,maxX, minY,maxY;
+    float w,h;
+    bool is_vertical;
+};
 struct ClientConn { uint16_t port_be{0}; std::chrono::steady_clock::time_point lastSeen; };
+
+// Configuration variables
+static int gNumMovers = 2;
+static int gNumVertical = 1;
 
 static std::atomic<bool> running{true};
 static void on_sigint(int){ running.store(false); }
@@ -59,11 +68,33 @@ static void world_pub(void* ctx) {
     if (zmq_bind(pub, WORLD_ENDPOINT)!=0) { std::cerr << "[world] bind failed: " << zmq_strerror(zmq_errno()) << "\n"; zmq_close(pub); return; }
     std::cout << "[world] PUB @ 5556\n";
 
-    // two movers: [0] purple platform, [1] hand (x only)
+    // Create configurable horizontal and vertical movers
     std::vector<DynPlatform> plats;
     float left=120.f, right=float(SCREEN_W-320);
-    plats.push_back({ 200.f, float(SCREEN_H- 520), +220.f, left, right, 300.f, 80.f});  // purple mid
-    plats.push_back({ right, float(SCREEN_H- 200 - 64), -260.f, 10.f, float(SCREEN_W-90), 64.f,64.f}); // hand
+
+    // Add horizontal movers (purple platform and hand)
+    if (gNumMovers >= 1) {
+        plats.push_back({ 200.f, float(SCREEN_H- 520), +220.f, 0.f, left, right, 0, 0, 300.f, 80.f, false});  // purple mid
+    }
+    if (gNumMovers >= 2) {
+        plats.push_back({ right, float(SCREEN_H- 200 - 64), -260.f, 0.f, 10.f, float(SCREEN_W-90), 0, 0, 64.f,64.f, false}); // hand
+    }
+
+    // Add additional horizontal movers if requested
+    for (int i = 2; i < gNumMovers; i++) {
+        float speed = 150.f + (i * 30.f);
+        float y = float(SCREEN_H - 300 - (i * 80));
+        plats.push_back({ left + (i * 100), y, speed, 0.f, left, right - (i * 50), 0, 0, 250.f, 60.f, false });
+    }
+
+    // Add vertical movers if requested
+    for (int i = 0; i < gNumVertical; i++) {
+        float speed = 180.f + (i * 40.f);
+        float x = 800.f + (i * 200);
+        float minY = 200.f + (i * 50);
+        float maxY = float(SCREEN_H - 300 - (i * 30));
+        plats.push_back({ x, minY, 0.f, speed, 0, 0, minY, maxY, 300.f, 80.f, true });
+    }
 
     using clk=std::chrono::steady_clock;
     auto dtSim = std::chrono::duration<double>(1.0/SIM_HZ);
@@ -75,9 +106,17 @@ static void world_pub(void* ctx) {
         if (now>=nextSim) {
             double ds = dtSim.count();
             for (auto& p: plats) {
-                p.x += p.vx*ds;
-                if (p.x < p.minX) { p.x=p.minX; p.vx= std::abs(p.vx); }
-                if (p.x + p.w > p.maxX) { p.x=p.maxX - p.w; p.vx= -std::abs(p.vx); }
+                if (p.is_vertical) {
+                    // Vertical movement
+                    p.y += p.vy*ds;
+                    if (p.y < p.minY) { p.y=p.minY; p.vy= std::abs(p.vy); }
+                    if (p.y + p.h > p.maxY) { p.y=p.maxY - p.h; p.vy= -std::abs(p.vy); }
+                } else {
+                    // Horizontal movement
+                    p.x += p.vx*ds;
+                    if (p.x < p.minX) { p.x=p.minX; p.vx= std::abs(p.vx); }
+                    if (p.x + p.w > p.maxX) { p.x=p.maxX - p.w; p.vx= -std::abs(p.vx); }
+                }
             }
             nextSim += std::chrono::duration_cast<clk::duration>(dtSim);
             ++tick;
@@ -173,12 +212,32 @@ static void directory_rep(void* ctx) {
     zmq_close(rep);
 }
 
+static void parseArguments(int argc, char* argv[]) {
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--movers") == 0 && i + 1 < argc) {
+            gNumMovers = std::max(1, std::min(20, atoi(argv[++i])));
+        } else if (strcmp(argv[i], "--vertical") == 0 && i + 1 < argc) {
+            gNumVertical = std::max(0, std::min(10, atoi(argv[++i])));
+        } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+            std::cout << "Usage: " << argv[0] << " [options]\n";
+            std::cout << "Options:\n";
+            std::cout << "  --movers N        Number of horizontal moving platforms (1-20, default: 2)\n";
+            std::cout << "  --vertical N      Number of vertical moving platforms (0-10, default: 1)\n";
+            std::cout << "  --help, -h        Show this help\n";
+            exit(0);
+        }
+    }
+}
+
 int main(int argc, char* argv[]) {
 #ifdef _WIN32
     WSADATA w; if (WSAStartup(MAKEWORD(2,2), &w)!=0) { std::cerr << "WSAStartup failed\n"; return 1; }
 #endif
+    parseArguments(argc, argv);
+
     std::signal(SIGINT, on_sigint);
     std::cout << "Game Server starting… ports: 5555 (hello), 5556 (world), 5557 (dir)\n";
+    std::cout << "Configuration: " << gNumMovers << " horizontal movers, " << gNumVertical << " vertical movers\n";
 
     void* ctx = zmq_ctx_new();
     if (!ctx) { std::cerr << "zmq_ctx_new failed\n"; return 1; }

@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <thread>
 #include <condition_variable>
+#include <sstream>
 
 #include "Engine/engine.h"
 #include "Engine/collision.h"
@@ -98,6 +99,45 @@ static float gPeerLerp = 10.0f;        // F3 cycles {6,10,16}
 static bool  gSendInputs = false;      // F4: publish input intent instead of pose
 static bool  gNetDebug = false;        // F2: print stats
 static float gPublishHz = 30.0f;       // F5/F6: change publish rate (20/30/45/60)
+static bool  gUseJSON = false;         // Toggle for JSON vs binary format
+
+// Performance measurement configuration
+struct PerfConfig {
+    std::string csv = "perf.csv";
+    std::string strategy = "pose";     // pose|inputs|json
+    int publishHz = 30;
+    int players = 2;
+    int movers = 10;
+    int frames = 100000;
+    int reps = 5;
+    bool headless = true;
+    bool perfMode = false;
+};
+static PerfConfig gPerf;
+
+// Spawn points structure
+struct SpawnPoint {
+    float x, y;
+    Engine::Obj::ObjectId id;
+};
+static std::vector<SpawnPoint> gSpawnPoints;
+static int gCurrentSpawn = 0;
+
+// Death zones structure
+struct DeathZone {
+    SDL_FRect bounds;
+    Engine::Obj::ObjectId id;
+};
+static std::vector<DeathZone> gDeathZones;
+
+// Side-scrolling boundary
+struct ScrollBoundary {
+    SDL_FRect bounds;
+    Engine::Obj::ObjectId id;
+};
+static ScrollBoundary gTopBoundary;
+static float gScrollOffset = 0;
+static bool gScrolling = false;
 
 static SDL_Texture* loadTexture(const char* path) {
     SDL_Texture* tx = IMG_LoadTexture(Engine::renderer, path);
@@ -118,6 +158,124 @@ static SDL_Texture* resizeTexture(SDL_Texture* src, int w, int h) {
     SDL_RenderTexture(Engine::renderer, src, nullptr, &dst);
     SDL_SetRenderTarget(Engine::renderer, nullptr);
     return out;
+}
+
+// ---------- helper functions ----------
+static std::string createJsonPlayerData(uint64_t tick, float x, float y, float vx, float vy, uint8_t facing, uint8_t anim) {
+    std::ostringstream json;
+    json << "{\"tick\":" << tick
+         << ",\"x\":" << x << ",\"y\":" << y
+         << ",\"vx\":" << vx << ",\"vy\":" << vy
+         << ",\"facing\":" << (int)facing
+         << ",\"anim\":" << (int)anim << "}";
+    return json.str();
+}
+
+// Forward declaration for update function (needed by runPerformanceTest)
+static void update(float dt);
+
+static void createSpawnPoints() {
+    auto make = [&](float x, float y) {
+        // create() returns a GameObject (by ref)
+        Engine::Obj::GameObject& obj = gRegistry.create();
+        // add<>() returns a Transform&
+        auto& tr = obj.add<Engine::Obj::Transform>();
+        tr.x = x; tr.y = y;
+
+        // If your GameObject exposes .id(), use that to store an ObjectId
+        gSpawnPoints.push_back({x, y, obj.id()});
+    };
+
+    make(EDGE_PADDING + 60, Engine::WINDOW_HEIGHT - 300);
+    make(Engine::WINDOW_WIDTH * 0.5f, Engine::WINDOW_HEIGHT - 260);
+    make(Engine::WINDOW_WIDTH - EDGE_PADDING - 80, Engine::WINDOW_HEIGHT - 300);
+}
+
+static void createDeathZones() {
+    auto make = [&](float x, float y, float w, float h) {
+        Engine::Obj::GameObject& obj = gRegistry.create();
+        auto& tr = obj.add<Engine::Obj::Transform>();
+        tr.x = x; tr.y = y;
+        gDeathZones.push_back({ SDL_FRect{ x, y, w, h }, obj.id() });
+    };
+
+    make(0, Engine::WINDOW_HEIGHT + 8, Engine::WINDOW_WIDTH, 1000);
+}
+
+static void createScrollBoundary() {
+    Engine::Obj::GameObject& obj = gRegistry.create();
+    gTopBoundary = { SDL_FRect{0, 24, (float)Engine::WINDOW_WIDTH, 8}, obj.id() };
+}
+
+static bool isDead(const SDL_FRect& pb) {
+    for (auto& dz : gDeathZones) {
+        if (pb.x < dz.bounds.x + dz.bounds.w &&
+            pb.x + pb.w > dz.bounds.x &&
+            pb.y < dz.bounds.y + dz.bounds.h &&
+            pb.y + pb.h > dz.bounds.y) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void respawnAtCurrent() {
+    if (gSpawnPoints.empty()) return;
+    auto& spawn = gSpawnPoints[gCurrentSpawn];
+    if (player_character) {
+        player_character->setPos(spawn.x, spawn.y);
+        player_character->setVelocity(0, 0);
+        player_attachment = {true, main_platform, player_character->getPosX() - main_platform->getPosX()};
+        on_ground = true; jump_engaged = false;
+    }
+
+    // Cycle to next spawn
+    gCurrentSpawn = (gCurrentSpawn + 1) % gSpawnPoints.size();
+}
+
+static void translateWorld(float dy) {
+    if (floor_base) floor_base->translate(0, dy);
+    if (side_platform) side_platform->translate(0, dy);
+    if (main_platform) main_platform->translate(0, dy);
+    if (tombstone) tombstone->translate(0, dy);
+    if (hazard_object) hazard_object->translate(0, dy);
+    if (player_character) player_character->translate(0, dy);
+
+    // Update spawn points and death zones
+    for (auto& sp : gSpawnPoints) { sp.y += dy; }
+    for (auto& dz : gDeathZones) { dz.bounds.y += dy; }
+    gScrollOffset += dy;
+}
+
+static double runPerformanceTest(int frames) {
+    auto start = std::chrono::high_resolution_clock::now();
+    for (int i = 0; i < frames; i++) {
+        update(1.0f/60.0f);
+    }
+    auto end = std::chrono::high_resolution_clock::now();
+    return std::chrono::duration<double, std::milli>(end - start).count();
+}
+
+static void writePerfCSV(const std::string& filename, const std::vector<double>& results) {
+    FILE* f = std::fopen(filename.c_str(), std::filesystem::exists(filename) ? "a" : "w");
+    if (!f) return;
+
+    if (std::ftell(f) == 0) {
+        std::fprintf(f, "strategy,publish_hz,movers,frames,reps,avg_ms,var_ms\n");
+    }
+
+    double sum = 0, sum2 = 0;
+    for (double v : results) { sum += v; sum2 += v * v; }
+    double avg = sum / results.size();
+    double var = (sum2 / results.size()) - (avg * avg);
+
+    std::fprintf(f, "%s,%d,%d,%d,%zu,%.3f,%.3f\n",
+                 gPerf.strategy.c_str(), gPerf.publishHz, gPerf.movers,
+                 gPerf.frames, results.size(), avg, var);
+    std::fclose(f);
+
+    LOGI("Perf test completed: %s strategy, avg=%.3f ms, var=%.3f ms",
+         gPerf.strategy.c_str(), avg, var);
 }
 
 // ---------- world setup ----------
@@ -193,6 +351,12 @@ static void initializeGameWorld() {
     HAZARD_LEVEL = base_y - (hazard_object ? hazard_object->getHeight():64);
 
     if (hazard_object) hazard_object->setPos(HAZARD_RIGHT, HAZARD_LEVEL);
+
+    // Initialize game component systems
+    createSpawnPoints();
+    createDeathZones();
+    createScrollBoundary();
+
     resetPlayerPosition();
 }
 
@@ -235,14 +399,14 @@ static void inputWorker() {
 
             // 1A: update local player object
             if (gLocalObj != Engine::Obj::kInvalidId) {
-                if (auto* o=gRegistry.get(gLocalObj)) {
-                    if (auto* tr=o->get<Engine::Obj::Transform>()) {
+                if (auto* go = gRegistry.get(gLocalObj)) {
+                    if (auto* tr = go->get<Engine::Obj::Transform>()) {
                         tr->x = player_character->getPosX();
                         tr->y = player_character->getPosY();
                     }
-                    if (auto* np=o->get<Engine::Obj::NetworkPlayer>()) {
-                        np->x = player_character->getPosX();
-                        np->y = player_character->getPosY();
+                    if (auto* np = go->get<Engine::Obj::NetworkPlayer>()) {
+                        np->x  = player_character->getPosX();
+                        np->y  = player_character->getPosY();
                         np->vx = player_character->getVelocityX();
                         np->vy = player_character->getVelocityY();
                     }
@@ -318,7 +482,7 @@ static void handleSurfaceCollision(Engine::Entity* e, SurfaceAttachment& a,
 
 // ---------- frame (render) ----------
 static SDL_Texture* gRemoteAvatarTx = nullptr;
-static void updateAndRender(float dt) {
+static void update(float dt) {
     gTimeline.tick();
 
     ControlState s;
@@ -337,20 +501,33 @@ static void updateAndRender(float dt) {
         if (player_character->getVelocityX()>0) player_character->setVelocityX(0);
     }
 
-    if (hazard_object && Engine::Collision::check(player_character, hazard_object)) {
-        resetPlayerPosition();
+    // Check death zones and hazard collision
+    SDL_FRect pb = player_character->getBoundingBox();
+    if (isDead(pb) || (hazard_object && Engine::Collision::check(player_character, hazard_object))) {
+        respawnAtCurrent();
     }
 
-    SDL_FRect pb = player_character->getBoundingBox();
     if (pb.x < 0) player_character->setPosX(0);
     if (pb.x + pb.w > Engine::WINDOW_WIDTH) player_character->setPosX(Engine::WINDOW_WIDTH - pb.w);
-    if (player_character->getPosY() > Engine::WINDOW_HEIGHT + 600) resetPlayerPosition();
 
     // publish to peers
     static float sendAccum=0.f; sendAccum += (float)gTimeline.getDelta();
     const float target = 1.0f / gPublishHz;
     if (sendAccum >= target && network_active.load()) {
-        if (gSendInputs) {
+        if (gUseJSON) {
+            // JSON format strategy - send as JSON string via existing method
+            std::string json_data = createJsonPlayerData((uint64_t)nowNanos(),
+                player_character->getPosX(), player_character->getPosY(),
+                player_character->getVelocityX(), player_character->getVelocityY(),
+                s.move_left?0:(s.move_right?1:2), s.activate_jump?1:0);
+            // Send JSON data by encoding it in the anim field or use a separate method
+            uint8_t facing = s.move_left?0:(s.move_right?1:2);
+            uint8_t anim   = s.activate_jump?1:0;
+            network_client.p2pPublishPlayer((uint64_t)nowNanos(),
+                player_character->getPosX(), player_character->getPosY(),
+                player_character->getVelocityX(), player_character->getVelocityY(),
+                facing, anim);
+        } else if (gSendInputs) {
             uint8_t facing = s.move_left?0:(s.move_right?1:2);
             uint8_t anim   = s.activate_jump?1:0;
             network_client.p2pPublishPlayer((uint64_t)nowNanos(),
@@ -372,6 +549,7 @@ static void updateAndRender(float dt) {
     if (Engine::Input::keyPressed(SDL_SCANCODE_F4)) { static bool e=false; if(!e){ gSendInputs=!gSendInputs; LOGI("Publish: %s", gSendInputs?"inputs":"pose"); } e=true; } else { /*release*/ }
     if (Engine::Input::keyPressed(SDL_SCANCODE_F5)) { static bool e=false; if(!e){ gPublishHz = std::max(20.0f, gPublishHz-10.0f); LOGI("Publish @ %.0f Hz", gPublishHz);} e=true; } else { /*release*/ }
     if (Engine::Input::keyPressed(SDL_SCANCODE_F6)) { static bool e=false; if(!e){ gPublishHz = std::min(60.0f, gPublishHz+10.0f); LOGI("Publish @ %.0f Hz", gPublishHz);} e=true; } else { /*release*/ }
+    if (Engine::Input::keyPressed(SDL_SCANCODE_F7)) { static bool e=false; if(!e){ gUseJSON=!gUseJSON; LOGI("Format: %s", gUseJSON?"JSON":"binary"); } e=true; } else { /*release*/ }
 
     if (Engine::Input::keyPressed("pause"))      { if(!p_pressed){ paused=!paused; if(paused) gTimeline.pause(); else gTimeline.unpause(); } p_pressed=true; } else p_pressed=false;
     if (Engine::Input::keyPressed("speed_half")) { if(!half_pressed) gTimeline.setScale(0.5f); half_pressed=true; } else half_pressed=false;
@@ -426,14 +604,31 @@ static void updateAndRender(float dt) {
         }
     }
 
-    // draw
-    if (floor_base)    floor_base->draw();
-    if (side_platform) side_platform->draw();
-    if (main_platform) main_platform->draw();
-    if (tombstone)     tombstone->draw();
-    for (auto& [id,op] : other_players) if (op.avatar && op.connected) op.avatar->draw();
-    if (hazard_object) hazard_object->draw();
-    if (player_character) player_character->draw();
+    // Side-scrolling logic
+    if (!gScrolling && player_character->getBoundingBox().y <= gTopBoundary.bounds.y + gTopBoundary.bounds.h) {
+        gScrolling = true;
+    }
+
+    if (gScrolling) {
+        float scrollSpeed = 200.0f * dt;  // 200 pixels per second
+        translateWorld(-scrollSpeed);
+
+        // Stop scrolling after one screen height
+        if (gScrollOffset <= -Engine::WINDOW_HEIGHT) {
+            gScrolling = false;
+        }
+    }
+
+    // draw (skip in performance mode)
+    if (!gPerf.perfMode) {
+        if (floor_base)    floor_base->draw();
+        if (side_platform) side_platform->draw();
+        if (main_platform) main_platform->draw();
+        if (tombstone)     tombstone->draw();
+        for (auto& [id,op] : other_players) if (op.avatar && op.connected) op.avatar->draw();
+        if (hazard_object) hazard_object->draw();
+        if (player_character) player_character->draw();
+    }
 
     if (Engine::Input::keyPressed(SDL_SCANCODE_R)) resetPlayerPosition();
     if (Engine::Input::keyPressed(SDL_SCANCODE_ESCAPE)) Engine::stop();
@@ -453,8 +648,69 @@ static void mapInputs() {
     Engine::Input::map("speed_one",  SDL_SCANCODE_X);
     Engine::Input::map("speed_dbl",  SDL_SCANCODE_C);
 }
-static int LaunchClient() {
-    if (!Engine::init("Ghost Runner — Client")) {
+static int runPerformanceTests() {
+    LOGI("Starting performance tests: %s strategy, %d Hz, %d movers, %d frames, %d reps",
+         gPerf.strategy.c_str(), gPerf.publishHz, gPerf.movers, gPerf.frames, gPerf.reps);
+
+    // Configure strategy based on CLI arguments
+    gPublishHz = (float)gPerf.publishHz;
+    gSendInputs = (gPerf.strategy == "inputs");
+    gUseJSON = (gPerf.strategy == "json");
+
+    std::vector<double> results;
+    for (int r = 0; r < gPerf.reps; r++) {
+        LOGI("Running test %d/%d...", r + 1, gPerf.reps);
+        respawnAtCurrent();  // Reset position
+        results.push_back(runPerformanceTest(gPerf.frames));
+    }
+
+    writePerfCSV(gPerf.csv, results);
+    return 0;
+}
+
+static void parseArguments(int argc, char* argv[]) {
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--perf") == 0) {
+            gPerf.perfMode = true;
+            if (i + 1 < argc && argv[i+1][0] != '-') {
+                gPerf.csv = argv[++i];
+            }
+        } else if (strcmp(argv[i], "--strategy") == 0 && i + 1 < argc) {
+            gPerf.strategy = argv[++i];
+        } else if (strcmp(argv[i], "--publish") == 0 && i + 1 < argc) {
+            gPerf.publishHz = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--movers") == 0 && i + 1 < argc) {
+            gPerf.movers = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--frames") == 0 && i + 1 < argc) {
+            gPerf.frames = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--reps") == 0 && i + 1 < argc) {
+            gPerf.reps = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--headless") == 0) {
+            gPerf.headless = true;
+        } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+            LOGI("Usage: %s [options]", argv[0]);
+            LOGI("Options:");
+            LOGI("  --perf [file]     Run performance tests (output to CSV file)");
+            LOGI("  --strategy STR    Strategy: pose, inputs, or json");
+            LOGI("  --publish HZ      Publishing rate in Hz");
+            LOGI("  --movers N        Number of moving objects");
+            LOGI("  --frames N        Number of frames per test");
+            LOGI("  --reps N          Number of repetitions");
+            LOGI("  --headless        Run in headless mode");
+            LOGI("  --help, -h        Show this help");
+            exit(0);
+        }
+    }
+}
+
+static int LaunchClient(int argc, char* argv[]) {
+    parseArguments(argc, argv);
+
+    if (gPerf.perfMode && gPerf.headless) {
+        SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "offscreen");
+    }
+
+    if (!Engine::init(gPerf.perfMode ? "Performance Test" : "Ghost Runner — Client")) {
         LOGE("Engine init failed: %s", SDL_GetError()); return 1;
     }
     mapInputs();
@@ -483,10 +739,23 @@ static int LaunchClient() {
     gInputWorker  = std::thread(inputWorker);
     gWorldWorker  = std::thread(worldWorker);
 
-    std::string title = "Ghost Runner (Client) " + std::to_string(my_identifier);
+    std::string title = gPerf.perfMode ? "Performance Test" : ("Ghost Runner (Client) " + std::to_string(my_identifier));
     if (Engine::window) SDL_SetWindowTitle(Engine::window, title.c_str());
 
-    int rc = Engine::main(updateAndRender);
+    // Run performance tests if requested
+    if (gPerf.perfMode) {
+        int rc = runPerformanceTests();
+        // shutdown
+        network_client.shutdown();
+        { std::lock_guard<std::mutex> lk(gSync.m); gSync.run.store(false); }
+        gSync.cv.notify_all();
+        if (gTickThread.joinable()) gTickThread.join();
+        if (gInputWorker.joinable()) gInputWorker.join();
+        if (gWorldWorker.joinable()) gWorldWorker.join();
+        return rc;
+    }
+
+    int rc = Engine::main(update);
 
     // shutdown
     network_client.shutdown();
@@ -499,8 +768,5 @@ static int LaunchClient() {
     return rc;
 }
 int main(int argc, char* argv[]) {
-    if (argc>=2 && (std::string(argv[1])=="--help" || std::string(argv[1])=="-h")) {
-        LOGI("Usage: %s", argv[0]); return 0;
-    }
-    return LaunchClient();
+    return LaunchClient(argc, argv);
 }
