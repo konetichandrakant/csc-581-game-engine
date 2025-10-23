@@ -9,7 +9,6 @@
 int main() {
     using namespace std::chrono;
 
-    // ---- Fixed run parameters (visible in console & consistent with rubric) ----
     constexpr int ITERATIONS_PER_TRIAL = 100000; // 100k iterations per trial
     constexpr int TRIALS_PER_CONDITION = 5;      // 5 trials per condition
 
@@ -20,8 +19,6 @@ int main() {
     // Apply parameters to framework
     framework.setTestParameters(ITERATIONS_PER_TRIAL, TRIALS_PER_CONDITION);
 
-    // ---- Define scenarios once so we can both add and print them ----
-    // Each tuple: (clients, staticObjects, movingObjects)
     const std::vector<std::tuple<int,int,int>> scenarios = {
         {  2,  10,  10},
         {  4,  50,  50},
@@ -29,7 +26,6 @@ int main() {
         { 16, 200, 200},
     };
 
-    // Print a clear run configuration header (for your transcript/report)
     std::cout << "\n=== RUN CONFIGURATION ===\n";
     std::cout << "Trials per condition: "      << TRIALS_PER_CONDITION     << "\n";
     std::cout << "Iterations per trial: "      << ITERATIONS_PER_TRIAL     << "\n";
@@ -43,7 +39,6 @@ int main() {
     }
     std::cout << "====================================\n\n";
 
-    // Add test scenarios to framework
     for (auto [clients, statics, movings] : scenarios) {
         framework.addTestScenario(clients, statics, movings);
     }

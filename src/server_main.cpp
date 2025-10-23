@@ -9,19 +9,9 @@
 #include <csignal>
 #include <cstring>
 #include <zmq.h>
-
-#ifdef _WIN32
-  #ifndef NOMINMAX
-    #define NOMINMAX
-  #endif
-  #include <winsock2.h>
-  #include <ws2tcpip.h>
-  #pragma comment(lib, "Ws2_32.lib")
-#else
-  #include <arpa/inet.h>
-  #include <netinet/in.h>
-  #include <sys/socket.h>
-#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#pragma comment(lib, "Ws2_32.lib")
 
 static constexpr const char* CMD_ENDPOINT   = "tcp://*:5555";
 static constexpr const char* WORLD_ENDPOINT = "tcp://*:5556";
