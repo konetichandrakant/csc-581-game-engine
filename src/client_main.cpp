@@ -28,6 +28,7 @@
 #include "Engine/object/components/NetworkPlayer.hpp"
 
 #include <SDL3/SDL.h>
+#include <zmq.h>
 #include <SDL3/SDL_scancode.h>
 #include <SDL3_image/SDL_image.h>
 #include <numeric>
@@ -90,6 +91,9 @@ static std::thread gTickThread, gInputWorker, gWorldWorker;
 
 struct OtherPlayer { Engine::Entity* avatar=nullptr; float x=0,y=0,vx=0,vy=0; bool connected=false; };
 static std::unordered_map<int, OtherPlayer> other_players;
+static std::unordered_map<int, double> gPeerLastSeen;
+static std::unordered_map<int, Engine::Entity*> gRemote;
+static double gNowSeconds = 0.0;
 static std::mutex peers_mx;
 
 struct PeerState { float x,y,vx,vy; uint64_t tick; double t; };
@@ -295,6 +299,30 @@ static void handleDisconnectedPlayers() {
         remote_attachments.erase(id);
         gPeerBuf.erase(id);
         LOGI("Removed disconnected player %d", id);
+    }
+}
+
+static void cleanupStalePeers(const std::unordered_map<int, Engine::RemotePeerData>& currentPeers) {
+    const double TIMEOUT = 2.0;
+    std::vector<int> toRemove;
+    std::vector<int> toRemoveFromRemote;
+
+    for (auto& kv : gPeerLastSeen) {
+        if (!currentPeers.count(kv.first) && (gNowSeconds - kv.second) > TIMEOUT) {
+            toRemove.push_back(kv.first);
+            toRemoveFromRemote.push_back(kv.first);
+        }
+    }
+
+    for (int id : toRemove) {
+        gPeerLastSeen.erase(id);
+    }
+
+    for (int id : toRemoveFromRemote) {
+        if (gRemote[id]) {
+            delete gRemote[id];
+            gRemote.erase(id);
+        }
     }
 }
 
@@ -611,58 +639,14 @@ static void inputWorker() {
         }
     }
 }
+
 static void worldWorker() {
-    int last=0; const float dt=1.0f/120.0f; double t=0.0;
+    int last=0;
     while (true) {
         std::unique_lock<std::mutex> lk(gSync.m);
         gSync.cv.wait(lk,[&]{return !gSync.run.load() || gSync.ticks>last;});
         if (!gSync.run.load()) break;
         int run = gSync.ticks - last; last = gSync.ticks; lk.unlock();
-
-        for (int i=0;i<run;i++) {
-            t += dt;
-
-            auto srv = network_client.platforms();
-            if (srv.size()>=3) {
-                float a = std::min(1.0f, gPeerLerp*dt);
-                if (main_platform) {
-                    float cx=main_platform->getPosX(), cy=main_platform->getPosY();
-                    main_platform->setPos(cx + (srv[0].x - cx)*a, srv[0].y);
-                }
-                if (hazard_object) {
-                    float hx=hazard_object->getPosX();
-                    hazard_object->setPos(hx + (srv[1].x - hx)*a, srv[1].y);
-                }
-                if (hazard_object_v) {
-                    float hx=hazard_object_v->getPosX();
-                    float hy=hazard_object_v->getPosY();
-                    hazard_object_v->setPos(hx + (srv[2].x - hx)*a, hy + (srv[2].y - hy)*a);
-                }
-            } else if (hazard_object) {
-                float x = hazard_object->getPosX();
-                x += (hazard_direction_left?-hazard_velocity:hazard_velocity)*dt;
-                if (x<=HAZARD_LEFT){x=HAZARD_LEFT;hazard_direction_left=false;}
-                if (x>=HAZARD_RIGHT){x=HAZARD_RIGHT;hazard_direction_left=true;}
-                hazard_object->setPos(x, HAZARD_LEVEL);
-
-                if (hazard_object_v) {
-                    float y = hazard_object_v->getPosY();
-                    y += (vDown ? vSpeed : -vSpeed) * dt;
-                    if (y < V_MIN) { y = V_MIN; vDown = true; }
-                    if (y > V_MAX) { y = V_MAX; vDown = false; }
-                    hazard_object_v->setPos(hazard_object_v->getPosX(), y);
-                }
-            }
-
-            auto peers = network_client.p2pSnapshot();
-            std::lock_guard<std::mutex> gb(gPeerBufMx);
-            for (auto& [id,rp] : peers) {
-                PeerState ps{rp.x,rp.y,rp.vx,rp.vy,rp.lastTick,t};
-                auto& q = gPeerBuf[id];
-                q.push_back(ps);
-                while (q.size()>6) q.pop_front();
-            }
-        }
     }
 }
 
@@ -689,8 +673,7 @@ static SDL_Texture* gRemoteAvatarTx = nullptr;
 // Main game update loop - handle input, physics, networking, and rendering
 static void update(float dt) {
     gTimeline.tick();
-
-    handleDisconnectedPlayers();
+    gNowSeconds += dt;
 
     ControlState s;
     s.move_left  = Engine::Input::keyPressed("left");
@@ -759,6 +742,37 @@ static void update(float dt) {
         sendAccum = 0.f;
     }
 
+    auto srv = network_client.platforms();
+    if (srv.size() >= 3) {
+        float a = std::min(1.0f, gPeerLerp * dt);
+        if (main_platform) {
+            float cx = main_platform->getPosX(), cy = main_platform->getPosY();
+            main_platform->setPos(cx + (srv[0].x - cx) * a, srv[0].y);
+        }
+        if (hazard_object) {
+            float hx = hazard_object->getPosX();
+            hazard_object->setPos(hx + (srv[1].x - hx) * a, srv[1].y);
+        }
+        if (hazard_object_v) {
+            float hx = hazard_object_v->getPosX(), hy = hazard_object_v->getPosY();
+            hazard_object_v->setPos(hx + (srv[2].x - hx) * a, hy + (srv[2].y - hy) * a);
+        }
+    } else if (hazard_object) {
+        float x = hazard_object->getPosX();
+        x += (hazard_direction_left ? -hazard_velocity : hazard_velocity) * dt;
+        if (x <= HAZARD_LEFT) { x = HAZARD_LEFT; hazard_direction_left = false; }
+        if (x >= HAZARD_RIGHT) { x = HAZARD_RIGHT; hazard_direction_left = true; }
+        hazard_object->setPos(x, HAZARD_LEVEL);
+
+        if (hazard_object_v) {
+            float y = hazard_object_v->getPosY();
+            y += (vDown ? vSpeed : -vSpeed) * dt;
+            if (y < V_MIN) { y = V_MIN; vDown = true; }
+            if (y > V_MAX) { y = V_MAX; vDown = false; }
+            hazard_object_v->setPos(hazard_object_v->getPosX(), y);
+        }
+    }
+
     if (Engine::Input::keyPressed(SDL_SCANCODE_F3)) { static bool e=false; if(!e){ gPeerLerp=(gPeerLerp==6?10:(gPeerLerp==10?16:6)); LOGI("Smoothing %.1f", gPeerLerp);} e=true; } else { }
     if (Engine::Input::keyPressed(SDL_SCANCODE_F4)) { static bool e=false; if(!e){ gSendInputs=!gSendInputs; LOGI("Publish: %s", gSendInputs?"inputs":"pose"); } e=true; } else { }
     if (Engine::Input::keyPressed(SDL_SCANCODE_F5)) { static bool e=false; if(!e){ gPublishHz = std::max(20.0f, gPublishHz-10.0f); LOGI("Publish @ %.0f Hz", gPublishHz);} e=true; } else { }
@@ -781,43 +795,56 @@ static void update(float dt) {
         }
     }
 
-    std::lock_guard<std::mutex> lock(peers_mx);
-    {
-        std::lock_guard<std::mutex> gb(gPeerBufMx);
-        for (auto& kv : gPeerBuf) {
-            int id = kv.first; if (id == my_identifier) continue;
-            if (!other_players.count(id)) {
-                OtherPlayer np; np.avatar = new Engine::Entity(gRemoteAvatarTx);
-                np.avatar->setGravity(false); np.avatar->setPhysics(false);
-                np.connected = true; other_players[id]=np; remote_attachments[id]={};
-            }
-            auto& q = kv.second;
-            if (!q.empty()) {
-                PeerState ps = q.back();
-                auto& op = other_players[id];
-                float cx=op.avatar->getPosX(), cy=op.avatar->getPosY();
-                float a = std::min(1.0f, gPeerLerp * dt);
-                op.avatar->setPos(cx + (ps.x - cx)*a, cy + (ps.y - cy)*a);
+    auto peers = network_client.p2pSnapshot();
 
-                bool was = remote_attachments[id].attached;
-                remote_attachments[id].attached=false;
-                for (Engine::Entity* srf : { floor_base, side_platform, main_platform }) if (srf) {
-                    if (Engine::Collision::check(op.avatar, srf)) {
-                        SDL_FRect ab=op.avatar->getBoundingBox(), sb=srf->getBoundingBox();
-                        float ov = ab.y + ab.h - sb.y;
-                        if (ab.y < sb.y && ov>0 && ov<24.0f && ps.vy>=0) {
-                            op.avatar->setPosY(sb.y - ab.h);
-                            remote_attachments[id].attached=true; remote_attachments[id].surface=srf;
-                            if (!was || remote_attachments[id].surface!=srf)
-                                remote_attachments[id].x_offset = op.avatar->getPosX() - srf->getPosX();
-                            op.avatar->setPosX(srf->getPosX() + remote_attachments[id].x_offset);
-                            break;
-                        }
-                    }
-                }
-                if (!remote_attachments[id].attached) { remote_attachments[id].surface=nullptr; remote_attachments[id].x_offset=0.0f; }
-            }
+    for (auto& [id, rp] : peers) {
+        if (id == my_identifier) continue;
+        gPeerLastSeen[id] = gNowSeconds;
+
+        Engine::Entity*& e = gRemote[id];
+        if (!e) {
+            e = new Engine::Entity(gRemoteAvatarTx);
+            e->setGravity(false);
+            e->setPhysics(false);
         }
+
+        float cx = e->getPosX(), cy = e->getPosY();
+        float alpha = std::clamp(10.0f * dt, 0.0f, 1.0f);
+        float dx = rp.x - cx, dy = rp.y - cy;
+
+        if (std::fabs(dx) > Engine::WINDOW_WIDTH * 0.5f) {
+            e->setPos(rp.x, rp.y);
+        } else {
+            e->setPos(cx + dx * alpha, cy + dy * alpha);
+        }
+    }
+
+    std::vector<int> removeNow;
+    for (auto& kv : gRemote) {
+        if (!peers.count(kv.first)) {
+            removeNow.push_back(kv.first);
+        }
+    }
+    for (int id : removeNow) {
+        if (gRemote[id]) {
+            delete gRemote[id];
+        }
+        gRemote.erase(id);
+    }
+
+    const double TIMEOUT = 2.0;
+    std::vector<int> stale;
+    for (auto& kv : gPeerLastSeen) {
+        if (!peers.count(kv.first) && (gNowSeconds - kv.second) > TIMEOUT) {
+            stale.push_back(kv.first);
+        }
+    }
+    for (int id : stale) {
+        if (gRemote[id]) {
+            delete gRemote[id];
+        }
+        gRemote.erase(id);
+        gPeerLastSeen.erase(id);
     }
 
     if (!gPerf.perfMode) {
@@ -825,7 +852,11 @@ static void update(float dt) {
         if (side_platform) side_platform->draw();
         if (main_platform) main_platform->draw();
         if (tombstone)     tombstone->draw();
-        for (auto& [id,op] : other_players) if (op.avatar && op.connected) op.avatar->draw();
+        for (auto& kv : gRemote) {
+            if (kv.second && kv.second->getPosX() != -99999.0f) {
+                kv.second->draw();
+            }
+        }
         if (hazard_object) hazard_object->draw();
         if (hazard_object_v) hazard_object_v->draw();
         if (player_character) player_character->draw();

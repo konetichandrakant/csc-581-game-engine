@@ -239,9 +239,7 @@ static void parseArguments(int argc, char* argv[]) {
 
 // Main server entry point - initialize networking and start service threads
 int main(int argc, char* argv[]) {
-#ifdef _WIN32
     WSADATA w; if (WSAStartup(MAKEWORD(2,2), &w)!=0) { std::cerr << "WSAStartup failed\n"; return 1; }
-#endif
     parseArguments(argc, argv);
 
     std::signal(SIGINT, on_sigint);
@@ -265,9 +263,7 @@ int main(int argc, char* argv[]) {
     if (t3.joinable()) t3.join();
 
     zmq_ctx_term(ctx);
-#ifdef _WIN32
     WSACleanup();
-#endif
     std::cout << "Server stopped\n";
     return 0;
 }
