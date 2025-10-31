@@ -5,6 +5,7 @@
 #include <vector>
 #include <algorithm>
 #include <chrono>
+#include <iostream>
 
 namespace Engine {
     SDL_Window * window;

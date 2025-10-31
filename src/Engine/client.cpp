@@ -6,26 +6,27 @@
 #include <thread>
 #include <iostream>
 #include <cctype>
-#include <arpa/inet.h> // ntohs
+#include <vector>
+#include <winsock2.h> // Windows socket library
 
 namespace {
 
-// ===== Wire formats (match your course/engine messages) =====
+
 #pragma pack(push,1)
 
-// Server messages (HELLO + world snapshot layout).
+
 enum class MsgKind : uint8_t { Hello=1, HelloAck=2, UpdatePos=3, Snapshot=4 };
 
 struct HelloMsg {
     MsgKind  kind{MsgKind::Hello};
-    uint32_t name_len{0}; // followed by name_len bytes (UTF-8)
+    uint32_t name_len{0};
 };
 
 struct HelloAck {
     MsgKind kind{MsgKind::HelloAck};
     int32_t assigned_id{0};
     int32_t cmd_port{0};
-    int32_t pub_port{0};  // 0 when server doesn't publish world (directory-only mode)
+    int32_t pub_port{0};
 };
 
 struct UpdatePosMsg {
@@ -64,7 +65,7 @@ struct P2DRegister {
 
 struct P2DPeerEndpoint {
     int32_t  player_id{0};
-    uint32_t ipv4_be{0};  // unused in simple same-host variant
+    uint32_t ipv4_be{0};
     uint16_t port_be{0};
 };
 
@@ -72,14 +73,14 @@ struct P2DReply {
     P2PHeader h{P2PKind::DirReply,0};
     int32_t   my_player_id{0};
     uint32_t  peer_count{0};
-    // followed by peer_count P2DPeerEndpoint
+
 };
 
-// Authority world snapshot (carried over P2P)
+
 struct P2PWorld {
     P2PHeader h{P2PKind::World,0};
     uint32_t  platform_count{0};
-    // followed by platform_count XYRaw
+
 };
 
 #pragma pack(pop)
@@ -105,12 +106,8 @@ static void  set_conflate(void* s, int on){ zmq_setsockopt(s, ZMQ_CONFLATE,&on, 
 static void  set_rcvhwm(void* s, int hwm){ zmq_setsockopt(s, ZMQ_RCVHWM,  &hwm, sizeof(hwm)); }
 static void  set_sndhwm(void* s, int hwm){ zmq_setsockopt(s, ZMQ_SNDHWM,  &hwm, sizeof(hwm)); }
 
-// Robustly parse port from endpoint (IPv4/IPv6)
 static uint16_t parse_port_from_endpoint(const char* ep) {
-    // ep examples:
-    //  "tcp://0.0.0.0:53217"
-    //  "tcp://[::]:53217"
-    //  "tcp://127.0.0.1:53217"
+
     int len = (int)std::strlen(ep);
     int i = len - 1;
     while (i >= 0 && std::isdigit((unsigned char)ep[i])) --i;
@@ -121,7 +118,6 @@ static uint16_t parse_port_from_endpoint(const char* ep) {
     return static_cast<uint16_t>(port);
 }
 
-// Bind to an ephemeral local port and return it (robust across IPv4/IPv6).
 static uint16_t bind_ephemeral(void* sock) {
     if (zmq_bind(sock, "tcp://*:0") != 0) return 0;
     char ep[256]; size_t elen = sizeof(ep);
@@ -136,13 +132,11 @@ inline int64_t nowNs() {
                std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
-} // namespace (anonymous)
+}
 
 namespace Engine {
 
-// ======================================================================
-// ctor / dtor / shutdown
-// ======================================================================
+
 
 Client::Client() {}
 
@@ -151,24 +145,24 @@ Client::~Client() {
 }
 
 void Client::shutdown() {
-    // stop p2p first
+
     p2pRunning_.store(false, std::memory_order_relaxed);
     if (p2pRxThread_.joinable()) p2pRxThread_.join();
 
-    // stop world recv
+
     running_.store(false, std::memory_order_relaxed);
     if (recv_thread_.joinable()) recv_thread_.join();
 
-    // close sockets
+
     close_sock(pubMine_);  pubMine_  = nullptr;
     close_sock(subPeers_); subPeers_ = nullptr;
     close_sock(req_);      req_      = nullptr;
     close_sock(sub_);      sub_      = nullptr;
 
-    // free ctx
+
     free_ctx(ctx_);        ctx_      = nullptr;
 
-    // clear state
+
     {
         std::scoped_lock lk1(snap_mx_, plat_mx_, peersMtx_);
         snap_.clear();
@@ -179,9 +173,7 @@ void Client::shutdown() {
     isAuthority_.store(false);
 }
 
-// ======================================================================
-// Base client start (HELLO; optional SUB to external world server on 5556)
-// ======================================================================
+
 
 bool Client::start(const std::string& host, const std::string& displayName) {
     constexpr int kCmdPort   = 5555; // Hello/IDs on directory/server
@@ -192,7 +184,6 @@ bool Client::start(const std::string& host, const std::string& displayName) {
 bool Client::hello(const std::string& host, const std::string& displayName,
                    int cmdPort, int worldPubPort)
 {
-    // teardown previous
     if (recv_thread_.joinable()) { running_.store(false); recv_thread_.join(); }
     close_sock(req_);  req_ = nullptr;
     close_sock(sub_);  sub_ = nullptr;
@@ -200,7 +191,6 @@ bool Client::hello(const std::string& host, const std::string& displayName,
     if (!ctx_) ctx_ = mk_ctx();
     if (!ctx_) return false;
 
-    // REQ -> HELLO
     req_ = mk_sock(ctx_, ZMQ_REQ);
     if (!req_) return false;
     set_linger(req_, 0);
@@ -210,7 +200,7 @@ bool Client::hello(const std::string& host, const std::string& displayName,
     set_sndtimeo(req_, 500);
     if (!connect_tcp(req_, host, cmdPort)) { close_sock(req_); req_ = nullptr; return false; }
 
-    // send HELLO with name payload (retry to tolerate server start)
+
     bool ok = false;
     for (int attempt = 0; attempt < 40 && !ok; ++attempt) {
         HelloMsg hello{};
@@ -234,7 +224,6 @@ bool Client::hello(const std::string& host, const std::string& displayName,
     }
     if (!ok) { close_sock(req_); req_ = nullptr; std::cerr << "[Client] Hello failed.\n"; return false; }
 
-    // (Optional) SUB to external world server for platform snapshots
     sub_ = mk_sock(ctx_, ZMQ_SUB);
     if (sub_) {
         set_linger(sub_, 0);
@@ -260,10 +249,6 @@ void Client::sendPos(float x, float y) {
     zmq_send(req_, &up, sizeof(up), 0); // server will ack (compat only)
     char ack[8]; set_rcvtimeo(req_, 50); zmq_recv(req_, &ack, sizeof(ack), 0);
 }
-
-// ======================================================================
-// World snapshot reading (from external world server on :5556)
-// ======================================================================
 
 std::unordered_map<int, XY> Client::snapshot() const {
     std::scoped_lock lk(snap_mx_);
@@ -292,7 +277,6 @@ void Client::recvLoop() {
             if (h->kind == MsgKind::Snapshot) {
                 size_t off = sizeof(SnapshotMsgHeader);
 
-                // players (often 0 in external world server)
                 std::unordered_map<int, XY> tmpPlayers;
                 tmpPlayers.reserve(h->player_count);
                 for (uint32_t i=0; i<h->player_count; ++i) {
@@ -304,7 +288,7 @@ void Client::recvLoop() {
                     tmpPlayers[id] = XY{p->x, p->y};
                 }
 
-                // platforms
+
                 std::vector<XY> tmpPlatforms;
                 tmpPlatforms.reserve(h->platform_count);
                 for (uint32_t i=0; i<h->platform_count; ++i) {
@@ -325,9 +309,6 @@ void Client::recvLoop() {
     }
 }
 
-// ======================================================================
-// P2P: start/stop, directory join, publish & receive
-// ======================================================================
 
 bool Client::startP2P(const std::string& dirHost, int /*worldPubPortUnused*/, int dirPort) {
     dirHost_  = dirHost;
@@ -337,15 +318,12 @@ bool Client::startP2P(const std::string& dirHost, int /*worldPubPortUnused*/, in
     if (!ctx_) ctx_ = mk_ctx();
     if (!ctx_) { std::cerr << "[P2P] no ctx\n"; return false; }
 
-    // SUB to peers (one socket, many connects)
     subPeers_ = mk_sock(ctx_, ZMQ_SUB);
     if (!subPeers_) { std::cerr << "[P2P] SUB alloc failed\n"; return false; }
     set_linger(subPeers_, 0);
-    set_rcvhwm(subPeers_, 1);       // keep only the latest
-    set_conflate(subPeers_, 1);     // newest message wins
+    set_rcvhwm(subPeers_, 1);
+    set_conflate(subPeers_, 1);
     subscribe_all(subPeers_);
-
-    // PUB for my player (and authority world when needed)
     pubMine_ = mk_sock(ctx_, ZMQ_PUB);
     if (!pubMine_) { std::cerr << "[P2P] PUB alloc failed\n"; return false; }
     set_linger(pubMine_, 0);
@@ -353,16 +331,15 @@ bool Client::startP2P(const std::string& dirHost, int /*worldPubPortUnused*/, in
     myPubPort_ = bind_ephemeral(pubMine_);
     if (!myPubPort_) { std::cerr << "[P2P] bind ephemeral failed (LAST_ENDPOINT parse?)\n"; close_sock(pubMine_); pubMine_=nullptr; return false; }
 
-    // Give OS a moment so peers don't race the connect
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-    // Join directory & connect to current peers
+
     if (!p2pQueryDirectoryAndConnect_()) {
         std::cerr << "[P2P] initial directory query FAILED (host=" << dirHost_ << " port=" << dirPort_ << ")\n";
-        // keep running anyway; peers can still connect to us
+
     }
 
-    // init authority sim timers
+
     nextAuthSim_ = std::chrono::steady_clock::now();
     nextAuthPub_ = std::chrono::steady_clock::now();
 
@@ -403,7 +380,7 @@ bool Client::p2pQueryDirectoryAndConnect_() {
     int n = zmq_recv(req, buf, sizeof(buf), 0);
     close_sock(req);
     if (n < static_cast<int>(sizeof(P2DReply))) {
-        // Directory likely down -> keep current connections
+
         return false;
     }
 
@@ -415,13 +392,12 @@ bool Client::p2pQueryDirectoryAndConnect_() {
     size_t newConnects = 0;
     for (uint32_t i=0; i<r->peer_count; ++i) {
         const int peerId = list[i].player_id;
-        if (peerId == my_id_.load()) continue;                // skip self
-        if (connectedPeerIds_.count(peerId)) continue;        // already connected
+        if (peerId == my_id_.load()) continue;
+        if (connectedPeerIds_.count(peerId)) continue;
 
         int port = ntohs(list[i].port_be);
         if (port <= 0) continue;
 
-        // Same-host testing: use directory host address; for multi-machine, use peer IP from ipv4_be.
         std::string ep = "tcp://" + dirHost_ + ":" + std::to_string(port);
         if (zmq_connect(subPeers_, ep.c_str()) == 0) {
             connectedPeerIds_.insert(peerId);
@@ -448,17 +424,13 @@ void Client::p2pPublishPlayer(uint64_t tick,
     zmq_send(pubMine_, &ps, sizeof(ps), ZMQ_DONTWAIT);
 }
 
-// ======================================================================
-// Authority failover: step & broadcast world via P2P when server is down
-// ======================================================================
-
 void Client::configureAuthorityLayout(int winW, int winH) {
     winW_ = winW; winH_ = winH;
 }
 
 void Client::becomeAuthority_() {
     if (isAuthority_.load()) return;
-    // Initialize platforms to your level's two moving bricks (order matters)
+
     const float minX = 120.0f;
     const float maxX = (float)winW_ - 320.0f;
     authPlats_.clear();
@@ -483,13 +455,13 @@ void Client::authorityMaybeStepAndBroadcast_() {
     using clock = std::chrono::steady_clock;
     auto now = clock::now();
 
-    // Simulate at 120 Hz, publish at 60 Hz (smoother)
+
     const double simHz = 120.0;
     const double pubHz = 60.0;
     auto dtSim = std::chrono::duration<double>(1.0 / simHz);
     auto dtPub = std::chrono::duration<double>(1.0 / pubHz);
 
-    // Step simulation (may catch up multiple steps if needed)
+
     while (now >= nextAuthSim_) {
         double step = dtSim.count();
         for (auto& p : authPlats_) {
@@ -500,7 +472,6 @@ void Client::authorityMaybeStepAndBroadcast_() {
         nextAuthSim_ += std::chrono::duration_cast<clock::duration>(dtSim);
     }
 
-    // Apply stepped positions locally so the authority also sees motion
     {
         std::vector<XY> local;
         local.reserve(authPlats_.size());
@@ -510,14 +481,13 @@ void Client::authorityMaybeStepAndBroadcast_() {
     }
     lastP2PWorldRecvNs_.store(nowNs(), std::memory_order_relaxed); // mark as fresh
 
-    // Publish world to peers at 60 Hz
     if (now >= nextAuthPub_) {
         const uint32_t N = (uint32_t)authPlats_.size();
         const size_t total = sizeof(P2PWorld) + N * sizeof(XYRaw);
         std::vector<uint8_t> out(total);
         auto* w = reinterpret_cast<P2PWorld*>(out.data());
         w->h.kind = P2PKind::World;
-        w->h.tick = (uint64_t)nowNs(); // monotonic tick
+        w->h.tick = (uint64_t)nowNs();
         w->platform_count = N;
         size_t off = sizeof(P2PWorld);
         for (const auto& p : authPlats_) {
@@ -529,9 +499,7 @@ void Client::authorityMaybeStepAndBroadcast_() {
     }
 }
 
-// ======================================================================
-// P2P receive loop (+ election & liveness) with DRAIN for smoothness
-// ======================================================================
+
 
 void Client::p2pRxLoop_() {
     set_rcvtimeo(subPeers_, 0); // we'll use non-blocking drain
@@ -545,7 +513,7 @@ void Client::p2pRxLoop_() {
     static auto nextPrune = std::chrono::steady_clock::now();
 
     while (p2pRunning_.load()) {
-        // ---- Drain all pending peer messages; keep applying the newest ----
+
         int n = 0;
         do {
             n = zmq_recv(subPeers_, buf, sizeof(buf), ZMQ_DONTWAIT);
@@ -591,14 +559,12 @@ void Client::p2pRxLoop_() {
 
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
 
-        // Periodic directory refresh to discover newcomers
         auto now = std::chrono::steady_clock::now();
         if (now >= nextDirRefresh_) {
             p2pQueryDirectoryAndConnect_();
             nextDirRefresh_ = now + std::chrono::milliseconds(500);
         }
 
-        // Liveness prune (drop peers with no packets for 3s)
         if (now >= nextPrune) {
             nextPrune = now + std::chrono::seconds(1);
             const int64_t staleNs = 3'000'000'000LL;
@@ -610,13 +576,9 @@ void Client::p2pRxLoop_() {
                 else ++it;
             }
         }
-
-        // -------- Authority election & sim --------
-        // Decide if server is "down": if we've ever seen server AND haven't received for >1s.
         const bool serverStale = hadServer_.load(std::memory_order_relaxed) &&
                                  (nowNs() - lastWorldRecvNs_.load(std::memory_order_relaxed) > 1'000'000'000LL);
 
-        // Compute lowest known id (myself + peers)
         int minId = my_id_.load();
         {
             std::lock_guard<std::mutex> lk(peersMtx_);
@@ -631,7 +593,7 @@ void Client::p2pRxLoop_() {
             resignAuthority_();
         }
 
-        // If authority, step & broadcast platforms periodically
+
         authorityMaybeStepAndBroadcast_();
     }
 }
@@ -661,4 +623,4 @@ std::unordered_map<int, RemotePeerData> Client::p2pSnapshot() {
     return out;
 }
 
-} // namespace Engine
+}
