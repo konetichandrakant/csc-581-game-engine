@@ -19,7 +19,7 @@ namespace Engine {
 
         /*
          * determine whether the key is pressed based on SDL_Scancode value.
-         * see https://wiki.libsdl.org/SDL3/SDL_Scancode for a list of all scancodes.
+         * see https:
          *
          */
         static bool keyPressed(int sdlScancode);
@@ -36,7 +36,7 @@ namespace Engine {
          * for example, map("left", SDL_SCANCODE_A) would map the A key to an action called 'left'.
          *
          * Multiple scancodes can be mapped to the same action.
-         * see https://wiki.libsdl.org/SDL3/SDL_Scancode for a list of all scancodes.
+         * see https:
          */
         static void map(std::string actionName, int sdlScancode);
 

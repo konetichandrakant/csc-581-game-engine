@@ -1,4 +1,4 @@
-// src/Engine/object/components/NetworkPlayer.hpp
+
 #pragma once
 #include "../Component.hpp"
 #include <chrono>
@@ -11,19 +11,19 @@ namespace Engine::Obj {
         bool isLocal{false};
         bool isConnected{true};
         
-        // Position and velocity
+
         float x{0.f}, y{0.f}, vx{0.f}, vy{0.f};
         uint8_t facing{0}, anim{0};
         uint64_t lastTick{0};
         
-        // Timing for disconnect detection
+
         std::chrono::steady_clock::time_point lastUpdateTime;
         static constexpr auto DISCONNECT_TIMEOUT = std::chrono::milliseconds(5000);
         
-        // Input state for local players
+
         bool leftPressed{false}, rightPressed{false}, jumpPressed{false};
         
-        // Network interpolation
+
         float targetX{0.f}, targetY{0.f};
         float prevX{0.f}, prevY{0.f};
         

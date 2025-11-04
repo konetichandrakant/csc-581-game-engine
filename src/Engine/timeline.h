@@ -32,12 +32,12 @@ namespace Engine {
         void reset();
 
     private:
-        std::string _name;      // Human-readable name of the timeline.
-        double _scale = 1.0;    // Speed multiplier.
-        bool   _paused = false; // Whether the timeline is currently paused.
-        double _delta = 0.0;    // Delta computed in last update.
-        double _accum = 0.0;    // Total accumulated time.
-        time_point _last_t;     // timestamp of last frame (used for computing delta)
+        std::string _name;
+        double _scale = 1.0;
+        bool   _paused = false;
+        double _delta = 0.0;
+        double _accum = 0.0;
+        time_point _last_t;
     };
 
-} // namespace Engine
+}

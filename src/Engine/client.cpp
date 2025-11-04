@@ -6,7 +6,7 @@
 #include <thread>
 #include <iostream>
 #include <cctype>
-#include <arpa/inet.h> // ntohs
+#include <arpa/inet.h>
 
 namespace {
 
@@ -43,8 +43,8 @@ struct SnapshotMsgHeader {
     uint32_t platform_count{0};
 };
 
-// P2P directory + player state + authority world
-enum class P2PKind : uint8_t { World=1, Player=2, DirRegister=3, DirReply=4 };
+
+enum class P2PKind : uint8_t { World=1, Player=2, DirRegister=3, DirReply=4, Event=5 };
 
 struct P2PHeader { P2PKind kind; uint64_t tick; };
 
@@ -53,6 +53,14 @@ struct P2PPlayer {
     int32_t   player_id{0};
     float     x{0}, y{0}, vx{0}, vy{0};
     uint8_t   facing{0}, anim{0};
+};
+
+struct P2PEvent {
+    P2PHeader h{P2PKind::Event,0};
+    int32_t   player_id{0};
+    uint32_t  event_kind{0};       // 0=collision, 1=death, 2=spawn, 3=input
+    float     x{0}, y{0};          // For spawn/collision position
+    char      extra_data[48]{0};   // For cause, action, etc.
 };
 
 struct P2DRegister {
@@ -84,7 +92,7 @@ struct P2PWorld {
 
 #pragma pack(pop)
 
-// ===== Small ZMQ helpers =====
+
 static void* mk_ctx() { return zmq_ctx_new(); }
 static void  free_ctx(void* c){ if (c) zmq_ctx_term(c); }
 
@@ -110,7 +118,7 @@ static uint16_t parse_port_from_endpoint(const char* ep) {
     int len = (int)std::strlen(ep);
     int i = len - 1;
     while (i >= 0 && std::isdigit((unsigned char)ep[i])) --i;
-    ++i; // first digit
+    ++i;
     if (i < 0 || i >= len) return 0;
     int port = std::atoi(ep + i);
     if (port <= 0 || port > 65535) return 0;
@@ -120,7 +128,7 @@ static uint16_t parse_port_from_endpoint(const char* ep) {
 static uint16_t bind_ephemeral(void* sock) {
     if (zmq_bind(sock, "tcp://*:0") != 0) return 0;
     char ep[256]; size_t elen = sizeof(ep);
-    if (zmq_getsockopt(sock, ZMQ_LAST_ENDPOINT, ep, &elen) != 0) return 0; // e.g. "tcp://[::]:53217"
+    if (zmq_getsockopt(sock, ZMQ_LAST_ENDPOINT, ep, &elen) != 0) return 0;
     uint16_t port = parse_port_from_endpoint(ep);
     std::cout << "[P2P] bound PUB at " << ep << " (port=" << port << ")\n";
     return port;
@@ -175,8 +183,8 @@ void Client::shutdown() {
 
 
 bool Client::start(const std::string& host, const std::string& displayName) {
-    constexpr int kCmdPort   = 5555; // Hello/IDs on directory/server
-    constexpr int kWorldPort = 5556; // external world server (platforms-only)
+    constexpr int kCmdPort   = 5555;
+    constexpr int kWorldPort = 5556;
     return hello(host, displayName, kCmdPort, kWorldPort);
 }
 
@@ -245,8 +253,36 @@ void Client::sendPos(float x, float y) {
     UpdatePosMsg up{};
     up.id = my_id_.load();
     up.x = x; up.y = y;
-    zmq_send(req_, &up, sizeof(up), 0); // server will ack (compat only)
+    zmq_send(req_, &up, sizeof(up), 0);
     char ack[8]; set_rcvtimeo(req_, 50); zmq_recv(req_, &ack, sizeof(ack), 0);
+}
+
+void Client::p2pPublishEvent(uint32_t eventKind, float x, float y, const char* extraData) {
+    if (!pubMine_ || !p2pRunning_.load()) return;
+    
+    P2PEvent evt{};
+    evt.h.kind = P2PKind::Event;
+    evt.h.tick = (uint64_t)nowNs();
+    evt.player_id = my_id_.load();
+    evt.event_kind = eventKind;
+    evt.x = x;
+    evt.y = y;
+    
+    if (extraData) {
+        size_t len = std::strlen(extraData);
+        size_t copyLen = std::min(len, sizeof(evt.extra_data) - 1);
+        std::memcpy(evt.extra_data, extraData, copyLen);
+        evt.extra_data[copyLen] = '\0';
+    }
+    
+    zmq_send(pubMine_, &evt, sizeof(evt), ZMQ_DONTWAIT);
+}
+
+std::vector<Client::NetworkEventData> Client::getPendingNetworkEvents() {
+    std::lock_guard<std::mutex> lk(networkEventsMtx_);
+    std::vector<NetworkEventData> result;
+    result.swap(pendingNetworkEvents_);
+    return result;
 }
 
 std::unordered_map<int, XY> Client::snapshot() const {
@@ -345,11 +381,10 @@ bool Client::startP2P(const std::string& dirHost, int /*worldPubPortUnused*/, in
     p2pRunning_.store(true);
     p2pRxThread_ = std::thread(&Client::p2pRxLoop_, this);
 
-    // Trigger an early refresh after startup
+
     nextDirRefresh_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
 
-    std::cout << "[P2P] startP2P OK. myId=" << my_id_.load()
-              << " pubPort=" << myPubPort_ << "\n";
+    
     return true;
 }
 
@@ -385,7 +420,7 @@ bool Client::p2pQueryDirectoryAndConnect_() {
 
     const auto* r = reinterpret_cast<const P2DReply*>(buf);
     my_id_.store(r->my_player_id);
-    std::cout << "[P2P] dir reply: myId=" << my_id_.load() << " peers=" << r->peer_count << "\n";
+
 
     const auto* list = reinterpret_cast<const P2DPeerEndpoint*>(buf + sizeof(P2DReply));
     size_t newConnects = 0;
@@ -408,7 +443,6 @@ bool Client::p2pQueryDirectoryAndConnect_() {
         }
     }
 
-    if (newConnects == 0) std::cout << "[P2P] no new peers to connect\n";
     return true;
 }
 
@@ -478,7 +512,7 @@ void Client::authorityMaybeStepAndBroadcast_() {
         std::scoped_lock l2(plat_mx_);
         platforms_.swap(local);
     }
-    lastP2PWorldRecvNs_.store(nowNs(), std::memory_order_relaxed); // mark as fresh
+    lastP2PWorldRecvNs_.store(nowNs(), std::memory_order_relaxed);
 
     if (now >= nextAuthPub_) {
         const uint32_t N = (uint32_t)authPlats_.size();
@@ -501,7 +535,7 @@ void Client::authorityMaybeStepAndBroadcast_() {
 
 
 void Client::p2pRxLoop_() {
-    set_rcvtimeo(subPeers_, 0); // we'll use non-blocking drain
+    set_rcvtimeo(subPeers_, 0);
     uint8_t buf[4096];
 
     if (nextDirRefresh_.time_since_epoch().count() == 0) {
@@ -552,6 +586,23 @@ void Client::p2pRxLoop_() {
                         { std::scoped_lock l2(plat_mx_); platforms_.swap(plats); }
                         lastP2PWorldRecvNs_.store(nowNs(), std::memory_order_relaxed);
                     }
+                } else if (h->kind == P2PKind::Event && static_cast<size_t>(n) >= sizeof(P2PEvent)) {
+                    const auto* evt = reinterpret_cast<const P2PEvent*>(buf);
+                    if (evt->player_id != my_id_.load()) {
+                        // Store event for processing in main loop
+                        {
+                            std::lock_guard<std::mutex> lk(networkEventsMtx_);
+                            NetworkEventData netEvt;
+                            netEvt.eventKind = evt->event_kind;
+                            netEvt.x = evt->x;
+                            netEvt.y = evt->y;
+                            netEvt.playerId = evt->player_id;
+                            netEvt.extraData = std::string(evt->extra_data);
+                            pendingNetworkEvents_.push_back(netEvt);
+                        }
+                        std::cout << "[P2P] Received event from peer " << evt->player_id 
+                                  << " type=" << evt->event_kind << " at (" << evt->x << "," << evt->y << ")\n";
+                    }
                 }
             }
         } while (n > 0);
@@ -588,7 +639,7 @@ void Client::p2pRxLoop_() {
             if (my_id_.load() == minId) becomeAuthority_();
             else resignAuthority_();
         } else {
-            // Prefer real server when it's live
+
             resignAuthority_();
         }
 

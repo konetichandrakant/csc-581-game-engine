@@ -10,7 +10,7 @@
 namespace Engine {
     SDL_Window * window;
     SDL_Renderer* renderer;
-    // TODO: a vector list of entities isn't particularly great for performance, but it works for now
+
     std::vector<Entity*> entities;
     bool TERMINATE = false;
     int BACKGROUND_COLOR[3] = {0, 32, 128};
@@ -23,9 +23,9 @@ namespace Engine {
         BACKGROUND_COLOR[2] = b;
     }
 
-    // returns true on success, false on failure
+
     bool init(const char* windowTitle) {
-        // create the SDL window
+
         if (!SDL_Init(SDL_INIT_VIDEO)) {
             SDL_Log("SDL Init failed: %s", SDL_GetError());
             return false;
@@ -47,31 +47,31 @@ namespace Engine {
         SDL_Event e;
 
         while (running) {
-            // Event handling
+
             while (SDL_PollEvent(&e)) {
                 if (e.type == SDL_EVENT_QUIT) running = false;
             }
-            // listen for terminate signal to manually stop the event loop.
+
             if (TERMINATE) {
-                TERMINATE = false; // reset the signal
-                running = false; // stop main loop after this iteration
+                TERMINATE = false;
+                running = false;
             }
 
-            // compute time since last frame
+
             timeline->tick();
 
-            //update each entity
+
             for (auto & e : entities) {
                 if (e->hasPhysics())
                     Physics::apply(e, timeline->getDelta());
                 e->update(timeline->getDelta());
             }
 
-            // call the user-supplied update function if not nullptr
+
             if (update) update(timeline->getDelta());
 
 
-            // Rendering
+
             SDL_SetRenderDrawColor(renderer,
                 BACKGROUND_COLOR[0],
                 BACKGROUND_COLOR[1],
@@ -80,7 +80,7 @@ namespace Engine {
             );
             SDL_RenderClear(renderer);
 
-            // draw entities
+
             for (auto & e : entities) {
                 e->draw();
             }
@@ -88,7 +88,7 @@ namespace Engine {
             SDL_RenderPresent(renderer);
         }
 
-        // destroy all entities in the list
+
         while (entities.size() > 0) {
             Entity* e = entities.back();
             delete e;

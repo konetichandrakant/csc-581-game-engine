@@ -7,22 +7,22 @@ namespace Engine {
 
     Timeline::Timeline(const std::string& name) : _name(name) {
         _last_t = std::chrono::system_clock::now();
-        _delta = 0.016; // Start with 60fps as default
+        _delta = 0.016;
         _accum = 0.0;
     }
 
     void Timeline::tick() {
         auto now = std::chrono::system_clock::now();
 
-        // Calculate time since last frame in milliseconds, then convert to seconds
+
         auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(now - _last_t);
-        double frame_time = duration.count() / 1000.0; // Convert milliseconds to seconds
+        double frame_time = duration.count() / 1000.0;
 
         _last_t = now;
 
-        // Use a more reasonable clamp for normal operation
-        if (frame_time > 0.033) frame_time = 0.033; // Max 30fps delta to prevent extreme jumps
-        if (frame_time < 0.001) frame_time = 0.016; // Min 1000fps, use 60fps as fallback
+
+        if (frame_time > 0.033) frame_time = 0.033;
+        if (frame_time < 0.001) frame_time = 0.016;
 
         if (_paused) {
             _delta = 0.0;
@@ -48,7 +48,7 @@ namespace Engine {
     double Timeline::now() const { return _accum; }
 
     void Timeline::reset() {
-        _delta = 0.016; // Reset to 60fps
+        _delta = 0.016;
         _accum = 0.0;
         _last_t = std::chrono::system_clock::now();
     }

@@ -10,6 +10,8 @@ add_library(Engine
         collision.cpp
         scaling.cpp
         timeline.cpp
+        event_manager.cpp
+        replay_manager.cpp
         client.cpp
         server.cpp
         Networking.cpp

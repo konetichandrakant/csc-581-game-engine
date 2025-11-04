@@ -1,4 +1,4 @@
-// contains functions for initializing SDL window and running the game loop.
+
 
 #pragma once
 #include "entity.h"
