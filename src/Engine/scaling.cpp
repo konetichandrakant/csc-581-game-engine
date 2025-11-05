@@ -27,9 +27,9 @@ namespace Engine {
                     rect.h * y_scaling
                 };
             case PROPORTIONAL_MAINTAIN_ASPECT_X:
-                // maintain aspect ratio of sprites while scaling;
-                // content will appear or be truncated along the x axis as window aspect ratio changes.
-                // shifted so that the original content remains centered.
+
+
+
                 return {
                     rect.x * y_scaling + x_shift,
                     rect.y * y_scaling,

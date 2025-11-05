@@ -10,6 +10,8 @@ add_library(Engine
         collision.cpp
         scaling.cpp
         timeline.cpp
+        event_manager.cpp
+        replay_manager.cpp
         client.cpp
         server.cpp
         Networking.cpp
@@ -29,6 +31,8 @@ add_library(Engine
         object/components/NetworkPlayer.hpp
         object/PerformanceTest.hpp
         object/PerformanceTest.cpp
+        object/InputDeltaNetwork.hpp
+        object/InputDeltaNetwork.cpp
         object/components/platform_motion.h
         camera.h
 )
@@ -39,11 +43,6 @@ target_link_libraries(Engine
         SDL3::SDL3
         SDL3_image::SDL3_image
 )
-
-# Windows-specific libraries
-if(WIN32)
-    target_link_libraries(Engine PUBLIC ws2_32)
-endif()
 
 # Make headers available to dependents with "Engine/..." includes.
 # Since you include "Engine/Net/Client.h" from outside, expose the project src/ path.

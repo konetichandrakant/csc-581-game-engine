@@ -9,14 +9,14 @@ enum class MotionType : uint8_t { Horizontal=0, Vertical=1 };
 struct PlatformMotion {
     MotionType type{MotionType::Horizontal};
 
-    // Bounds for ping-pong
+
     float minX{0}, maxX{0};
     float minY{0}, maxY{0};
 
-    // Velocities
+
     float vx{0}, vy{0};
 
-    // Integrate one tick of motion. dt in seconds.
+
     template<typename TransformT>
     void step(TransformT& tr, float dt) {
         switch (type) {
@@ -34,4 +34,4 @@ struct PlatformMotion {
     }
 };
 
-} // namespace Engine::Obj
+}

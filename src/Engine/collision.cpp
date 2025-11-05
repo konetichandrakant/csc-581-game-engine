@@ -14,7 +14,7 @@ namespace Engine::Collision {
     std::vector<Entity*> all(Entity* e) {
         std::vector<Entity*> out;
         for (auto cmp : entities) {
-            if (cmp == e || !cmp->hasCollisions()) continue; // don't check for collisions with yourself, ignore entities with collisions off
+            if (cmp == e || !cmp->hasCollisions()) continue;
             if (check(cmp, e)) out.push_back(cmp);
         }
         return out;
@@ -25,16 +25,16 @@ namespace Engine::Collision {
         if (!SDL_GetRectIntersectionFloat(&a_box, &b_box, &overlap)) return NO_COLLISION;
 
         if (overlap.w >= overlap.h) {
-            // if our overlap is wider than it is tall, this was very likely a vertical collision.
-            // returns 4 (BOTTOM) if a is above b, and 3 (TOP) if a is below b.
+
+
             if (a_pos.y < b_pos.y) {
                 return BOTTOM;
             } else {
                 return TOP;
             }
         } else {
-            // otherwise, probably a horizontal collision.
-            // returns 2 (RIGHT) if a is to the left of b, and 1 (LEFT) if a is to the right of b.
+
+
             if (a_pos.x < b_pos.x) {
                 return RIGHT;
             } else {
@@ -44,13 +44,9 @@ namespace Engine::Collision {
     }
 
     int checkEdge(Entity* a, Entity* b) {
-        /*
-         * unfortunately, all of my many hacks were insufficient
-         * and we have to actually step 1px at a time through
-         * the movement to get accurate collisions. bummer!
-         */
+     
 
-        const float STEP_SIZE = 1; //px
+        const float STEP_SIZE = 1;
 
         SDL_FRect a_box = a->getBoundingBox();
         SDL_FRect b_box = b->getBoundingBox();
@@ -69,7 +65,7 @@ namespace Engine::Collision {
         int n = Vec2_length(d_v) / STEP_SIZE;
         int code = 0;
 
-        // starting position of entity A the previous frame
+
         a_box.x -= d_v.x;
         a_box.y -= d_v.y;
 
@@ -81,7 +77,7 @@ namespace Engine::Collision {
             a_box.y += step.y;
         }
 
-        // it shouldn't be possible to get here
+
         return NO_COLLISION;
     };
 }

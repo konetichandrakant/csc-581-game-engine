@@ -18,7 +18,7 @@ namespace Engine { namespace Net {
         uint32_t client_id;
         uint64_t input_seq;
         float    dt_client;
-        uint8_t  left;   // bool as byte
+        uint8_t  left;
         uint8_t  right;
         uint8_t  jump;
         uint8_t  _pad{0};
@@ -52,7 +52,7 @@ namespace Engine { namespace Net {
         uint32_t proto_ver;
         MsgKind  kind;
         uint64_t world_tick;
-        double   world_time;       // seconds
+        double   world_time;
         PlayerState me;
         uint32_t others_count;
         uint32_t platforms_count;
@@ -66,4 +66,4 @@ namespace Engine { namespace Net {
         }
     };
 
-}} // namespace Engine::Net
+}}

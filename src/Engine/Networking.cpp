@@ -3,7 +3,7 @@
 #include <cstring>
 #include <thread>
 
-// Minimal helpers over C libzmq:
+
 static void* make_ctx() { return zmq_ctx_new(); }
 static void  free_ctx(void* c) { if(c) zmq_ctx_term(c); }
 static void* make_socket(void* ctx, int type) { return zmq_socket(ctx, type); }
@@ -20,13 +20,13 @@ static bool  send_buf(void* sock, const void* data, size_t n){
     return zmq_send(sock, data, n, 0)==(int)n;
 }
 static int   recv_buf(void* sock, void* out, size_t n){
-    // If message is same or larger than struct, n bytes copied; if bigger, we’ll drop extra frames (not used here).
-    return zmq_recv(sock, out, n, 0); // blocks
+
+    return zmq_recv(sock, out, n, 0);
 }
 
 namespace Engine { namespace Net {
 
-//==================== Server ====================
+
 
 Server::Server(const ServerConfig& cfg)
 : worldHz(cfg.world_hz)
@@ -34,7 +34,7 @@ Server::Server(const ServerConfig& cfg)
     zmq_ctx = make_ctx();
     t0 = Clock::now();
 
-    // seed platforms
+
     {
         std::lock_guard<std::mutex> lk(worldMx);
         for (auto s : cfg.platforms) {
@@ -45,10 +45,10 @@ Server::Server(const ServerConfig& cfg)
             platforms.push_back(p);
         }
     }
-    // plan client threads
+
     for (auto [id, port] : cfg.clients) {
         clientThreads.push_back(ClientThread{id, port, std::thread()});
-        // also ensure player exists
+
         std::lock_guard<std::mutex> lk(worldMx);
         players.emplace(id, Player{});
     }
@@ -62,10 +62,10 @@ Server::~Server() {
 void Server::start() {
     if (running.exchange(true)) return;
 
-    // world fixed-rate
+
     worldThread = std::thread(&Server::worldLoop, this);
 
-    // one REP thread per client
+
     for (auto& c : clientThreads) {
         c.th = std::thread(&Server::clientRepLoop, this, c.id, c.port);
     }
@@ -128,7 +128,7 @@ void Server::snapshotFor(uint32_t client_id, StateMsg& out){
     out.world_tick = tick;
     out.world_time = std::chrono::duration<double>(Clock::now() - t0).count();
 
-    // me
+
     auto it = players.find(client_id);
     if (it != players.end()) {
         out.me.client_id = client_id;
@@ -136,7 +136,7 @@ void Server::snapshotFor(uint32_t client_id, StateMsg& out){
         out.me.vel = it->second.vel;
     }
 
-    // others
+
     out.others_count = 0;
     for (auto& kv : players) {
         if (kv.first == client_id) continue;
@@ -147,7 +147,7 @@ void Server::snapshotFor(uint32_t client_id, StateMsg& out){
         slot.vel = kv.second.vel;
     }
 
-    // platforms
+
     out.platforms_count = 0;
     for (auto& p : platforms) {
         if (out.platforms_count >= MAX_PLATFORMS) break;
@@ -160,13 +160,13 @@ void Server::snapshotFor(uint32_t client_id, StateMsg& out){
 void Server::clientRepLoop(uint32_t client_id, int port){
     void* rep = make_socket(zmq_ctx, ZMQ_REP);
     if (!bind_tcp(rep, port)) {
-        // If bind fails, keep thread alive but idle to avoid crashing demo.
+
         while (running.load()) std::this_thread::sleep_for(std::chrono::milliseconds(100));
         close_socket(rep);
         return;
     }
 
-    // Make sure player exists
+
     {
         std::lock_guard<std::mutex> lk(worldMx);
         players.emplace(client_id, Player{});
@@ -178,7 +178,7 @@ void Server::clientRepLoop(uint32_t client_id, int port){
         if (n <= 0) continue;
 
         if (in.kind == MsgKind::Input && in.proto_ver == PROTO_VER && in.client_id == client_id) {
-            // update latest input
+
             std::lock_guard<std::mutex> lk(worldMx);
             auto it = players.find(client_id);
             if (it != players.end()) {
@@ -188,7 +188,7 @@ void Server::clientRepLoop(uint32_t client_id, int port){
             }
         }
 
-        // Reply with snapshot
+
         StateMsg out{};
         {
             std::lock_guard<std::mutex> lk(worldMx);
@@ -199,7 +199,7 @@ void Server::clientRepLoop(uint32_t client_id, int port){
     close_socket(rep);
 }
 
-//==================== Client ====================
+
 
 Client::Client(const std::string& host, int port, uint32_t my_id)
 : myId(my_id)
@@ -221,4 +221,4 @@ bool Client::exchange(bool left, bool right, bool jump, float dt_client, StateMs
     return n == (int)sizeof(out) && out.kind == MsgKind::State && out.proto_ver == PROTO_VER;
 }
 
-}} // namespace Engine::Net
+}}

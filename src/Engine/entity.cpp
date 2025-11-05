@@ -27,14 +27,14 @@ namespace Engine {
     };
 
     void Entity::update(float dt) {
-        // intentionally left blank
+
     }
 
     void Entity::draw() {
-        // TODO: should we draw the sprite centered at (x,y) instead of (x, y) being at the top right?
 
-        // Source (src) Rectangle is capturing the image from the spritesheet
-        // for now, the whole image
+
+
+
         SDL_FRect srcRect = { /* x(position), y(position), width, height */
             0.0f,
             0.0f,
@@ -42,7 +42,7 @@ namespace Engine {
             (float)texture->h
         };
 
-        // Destination (dst) Rectangle is drawing the image on the window
+
         SDL_FRect dstRect = Scaling::apply(getBoundingBox());
 
         SDL_RenderTexture(renderer, texture, &srcRect, &dstRect);
