@@ -13,6 +13,10 @@
 #include <ws2tcpip.h>
 #pragma comment(lib, "Ws2_32.lib")
 
+#include "Engine/timeline.h"
+#include "Engine/event_manager.h"
+#include "Engine/events.h"
+
 static constexpr const char* CMD_ENDPOINT   = "tcp://*:5555";
 static constexpr const char* WORLD_ENDPOINT = "tcp://*:5556";
 static constexpr const char* DIR_ENDPOINT   = "tcp://*:5557";
@@ -50,6 +54,50 @@ static double gDisconnectTimeoutSeconds = 5.0;
 
 static std::atomic<bool> running{true};
 static void on_sigint(int){ running.store(false); }
+
+// Server event system
+static Engine::Timeline gTimeline("ServerTime");
+static Engine::EventManager gEventManager(&gTimeline);
+
+// Event handler functions for server
+static void handleServerCollisionEvent(std::shared_ptr<Engine::Event> event) {
+    auto collisionEvent = std::static_pointer_cast<Engine::CollisionEvent>(event);
+    std::cout << "[SERVER] Collision event detected - broadcasting to clients" << std::endl;
+
+    // Here you could add code to broadcast collision events to connected clients
+    // For now, we'll just log it
+}
+
+static void handleServerDeathEvent(std::shared_ptr<Engine::Event> event) {
+    auto deathEvent = std::static_pointer_cast<Engine::DeathEvent>(event);
+    std::cout << "[SERVER] Death event: " << deathEvent->cause << " at position ("
+              << deathEvent->entity->getPosX() << ", " << deathEvent->entity->getPosY() << ")" << std::endl;
+
+    // Here you could add code to broadcast death events to connected clients
+}
+
+static void handleServerSpawnEvent(std::shared_ptr<Engine::Event> event) {
+    auto spawnEvent = std::static_pointer_cast<Engine::SpawnEvent>(event);
+    std::cout << "[SERVER] Spawn event: Entity spawned at (" << spawnEvent->x << ", " << spawnEvent->y << ")" << std::endl;
+
+    // Here you could add code to broadcast spawn events to connected clients
+}
+
+static void handleServerInputEvent(std::shared_ptr<Engine::Event> event) {
+    auto inputEvent = std::static_pointer_cast<Engine::InputEvent>(event);
+    std::cout << "[SERVER] Input event: " << inputEvent->action << " - "
+              << (inputEvent->pressed ? "pressed" : "released") << std::endl;
+
+    // Here you could add code to process input events and broadcast state changes
+}
+
+// Initialize server event handlers
+static void initializeServerEventHandlers() {
+    gEventManager.registerHandler("collision", handleServerCollisionEvent);
+    gEventManager.registerHandler("death", handleServerDeathEvent);
+    gEventManager.registerHandler("spawn", handleServerSpawnEvent);
+    gEventManager.registerHandler("input", handleServerInputEvent);
+}
 
 // Publish moving platform positions to all clients
 static void world_pub(void* ctx) {
@@ -92,6 +140,11 @@ static void world_pub(void* ctx) {
         auto now=clk::now();
         if (now>=nextSim) {
             double ds = dtSim.count();
+
+            // Update server timeline and process events
+            gTimeline.tick();
+            gEventManager.process();
+
             for (auto& p: plats) {
                 if (p.is_vertical) {
                     p.y += p.vy*ds;
@@ -238,6 +291,10 @@ int main(int argc, char* argv[]) {
     std::cout << "Features: Performance tracking=" << (gEnablePerformanceTracking ? "ON" : "OFF")
               << ", Disconnect handling=" << (gEnableDisconnectHandling ? "ON" : "OFF")
               << ", Timeout=" << gDisconnectTimeoutSeconds << "s\n";
+
+    // Initialize server event system
+    initializeServerEventHandlers();
+    std::cout << "Event system initialized with handlers for collision, death, spawn, and input events\n";
 
     void* ctx = zmq_ctx_new();
     if (!ctx) { std::cerr << "zmq_ctx_new failed\n"; return 1; }

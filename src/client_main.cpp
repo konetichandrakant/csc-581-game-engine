@@ -21,6 +21,8 @@
 #include "Engine/scaling.h"
 #include "Engine/client.h"
 #include "Engine/timeline.h"
+#include "Engine/event_manager.h"
+#include "Engine/events.h"
 
 #include "Engine/object/Registry.hpp"
 #include "Engine/object/NetworkSceneManager.hpp"
@@ -75,6 +77,7 @@ static const float EDGE_PADDING = 40.0f;
 static const float PLATFORM_DEPTH = 80.0f;
 
 static Engine::Timeline gTimeline("GameTime");
+static Engine::EventManager gEventManager(&gTimeline);
 static bool paused=false, p_pressed=false, half_pressed=false, one_pressed=false, dbl_pressed=false;
 
 static Engine::Client network_client;
@@ -222,6 +225,41 @@ static std::string createJsonPlayerData(uint64_t tick, float x, float y, float v
 
 static void update(float dt);
 
+// Event handler functions
+static void handleCollisionEvent(std::shared_ptr<Engine::Event> event) {
+    auto collisionEvent = std::static_pointer_cast<Engine::CollisionEvent>(event);
+    LOGI("Collision detected between entities at positions (%.2f, %.2f) and (%.2f, %.2f)",
+         collisionEvent->entity1->getPosX(), collisionEvent->entity1->getPosY(),
+         collisionEvent->entity2->getPosX(), collisionEvent->entity2->getPosY());
+}
+
+static void handleDeathEvent(std::shared_ptr<Engine::Event> event) {
+    auto deathEvent = std::static_pointer_cast<Engine::DeathEvent>(event);
+    LOGI("Entity died at position (%.2f, %.2f) - Cause: %s",
+         deathEvent->entity->getPosX(), deathEvent->entity->getPosY(), deathEvent->cause.c_str());
+}
+
+static void handleSpawnEvent(std::shared_ptr<Engine::Event> event) {
+    auto spawnEvent = std::static_pointer_cast<Engine::SpawnEvent>(event);
+    LOGI("Entity spawned at position (%.2f, %.2f)", spawnEvent->x, spawnEvent->y);
+}
+
+static void handleInputEvent(std::shared_ptr<Engine::Event> event) {
+    auto inputEvent = std::static_pointer_cast<Engine::InputEvent>(event);
+    LOGI("Input event: %s - %s (duration: %.2f)",
+         inputEvent->action.c_str(),
+         inputEvent->pressed ? "pressed" : "released",
+         inputEvent->duration);
+}
+
+// Initialize event handlers
+static void initializeEventHandlers() {
+    gEventManager.registerHandler("collision", handleCollisionEvent);
+    gEventManager.registerHandler("death", handleDeathEvent);
+    gEventManager.registerHandler("spawn", handleSpawnEvent);
+    gEventManager.registerHandler("input", handleInputEvent);
+}
+
 // Create player spawn points across the level
 static void createSpawnPoints() {
     auto make = [&](float x, float y) {
@@ -273,6 +311,10 @@ static void respawnAtCurrent() {
         player_character->setVelocity(0, 0);
         player_attachment = {true, main_platform, player_character->getPosX() - main_platform->getPosX()};
         on_ground = true; jump_engaged = false;
+
+        // Trigger spawn event
+        auto spawnEvent = std::make_shared<Engine::SpawnEvent>(player_character, spawn.x, spawn.y);
+        gEventManager.raise(spawnEvent);
     }
 
     gCurrentSpawn = (gCurrentSpawn + 1) % gSpawnPoints.size();
@@ -660,8 +702,14 @@ static void handleSurfaceCollision(Engine::Entity* e, SurfaceAttachment& a,
             if (eb.y < sb.y && overlap>0 && overlap < 24.0f && e->getVelocityY()>=0) {
                 e->setPosY(sb.y - eb.h); e->setVelocityY(0);
                 a.attached=true; a.surface=s;
-                if (!was || a.surface!=s) a.x_offset = e->getPosX() - s->getPosX();
-                e->setPosX(s->getPosX()+a.x_offset);
+                if (!was || a.surface!=s) {
+                    a.x_offset = e->getPosX() - s->getPosX();
+                    e->setPosX(s->getPosX()+a.x_offset);
+
+                    // Trigger collision event for landing on new platform
+                    auto collisionEvent = std::make_shared<Engine::CollisionEvent>(e, s);
+                    gEventManager.raise(collisionEvent);
+                }
                 break;
             }
         }
@@ -675,11 +723,30 @@ static void update(float dt) {
     gTimeline.tick();
     gNowSeconds += dt;
 
+    // Process queued events
+    gEventManager.process();
+
     ControlState s;
     s.move_left  = Engine::Input::keyPressed("left");
     s.move_right = Engine::Input::keyPressed("right");
     s.activate_jump = Engine::Input::keyPressed("jump");
     { std::lock_guard<std::mutex> g(control_mx); current_controls = s; }
+
+    // Track input state changes and trigger input events
+    static ControlState last_s;
+    if (s.move_left != last_s.move_left) {
+        auto inputEvent = std::make_shared<Engine::InputEvent>("move_left", s.move_left);
+        gEventManager.raise(inputEvent);
+    }
+    if (s.move_right != last_s.move_right) {
+        auto inputEvent = std::make_shared<Engine::InputEvent>("move_right", s.move_right);
+        gEventManager.raise(inputEvent);
+    }
+    if (s.activate_jump != last_s.activate_jump) {
+        auto inputEvent = std::make_shared<Engine::InputEvent>("jump", s.activate_jump);
+        gEventManager.raise(inputEvent);
+    }
+    last_s = s;
 
     std::vector<Engine::Entity*> surfaces = { floor_base, side_platform, main_platform };
     handleSurfaceCollision(player_character, player_attachment, surfaces);
@@ -689,12 +756,34 @@ static void update(float dt) {
         SDL_FRect pb = player_character->getBoundingBox(), tb=tombstone->getBoundingBox();
         player_character->setPosX(tb.x - pb.w - 2.0f);
         if (player_character->getVelocityX()>0) player_character->setVelocityX(0);
+
+        // Trigger collision event
+        auto collisionEvent = std::make_shared<Engine::CollisionEvent>(player_character, tombstone);
+        gEventManager.raise(collisionEvent);
     }
 
     SDL_FRect pb = player_character->getBoundingBox();
     if (isDead(pb) ||
         (hazard_object && Engine::Collision::check(player_character, hazard_object)) ||
         (hazard_object_v && Engine::Collision::check(player_character, hazard_object_v))) {
+
+        // Trigger death event
+        std::string cause = "unknown";
+        if (hazard_object && Engine::Collision::check(player_character, hazard_object)) {
+            cause = "hazard_collision";
+            auto collisionEvent = std::make_shared<Engine::CollisionEvent>(player_character, hazard_object);
+            gEventManager.raise(collisionEvent);
+        } else if (hazard_object_v && Engine::Collision::check(player_character, hazard_object_v)) {
+            cause = "vertical_hazard_collision";
+            auto collisionEvent = std::make_shared<Engine::CollisionEvent>(player_character, hazard_object_v);
+            gEventManager.raise(collisionEvent);
+        } else if (isDead(pb)) {
+            cause = "death_zone";
+        }
+
+        auto deathEvent = std::make_shared<Engine::DeathEvent>(player_character, cause);
+        gEventManager.raise(deathEvent);
+
         respawnAtCurrent();
     }
 
@@ -955,6 +1044,7 @@ static int LaunchClient(int argc, char* argv[]) {
     }
     mapInputs();
     initializeGameWorld();
+    initializeEventHandlers();
 
     std::string host = std::getenv("SERVER_HOST") ? std::getenv("SERVER_HOST") : "127.0.0.1";
     if (!network_client.start(host.c_str(), "Player"))
