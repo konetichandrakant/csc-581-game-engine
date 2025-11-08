@@ -8,6 +8,7 @@
 #include <unordered_map>
 #include <mutex>
 #include <atomic>
+#include <vector>
 
 namespace Engine::Obj {
     class NetworkSceneManager {
