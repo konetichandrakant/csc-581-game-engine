@@ -84,6 +84,38 @@ static Engine::Client network_client;
 static std::atomic<bool> network_active{false};
 static int my_identifier=0;
 
+// Network Event Protocol for receiving events from server
+#pragma pack(push,1)
+enum class GameEventType : uint8_t { Collision=1, Death=2, Spawn=3, Input=4 };
+struct NetworkEventMessage {
+    uint8_t kind{5}; // GameEvent
+    uint64_t timestamp{0};
+    uint32_t player_id{0};
+    GameEventType event_type{0};
+
+    // Event-specific data
+    struct {
+        float entity1_x, entity1_y;
+        float entity2_x, entity2_y;
+    } collision_data;
+
+    struct {
+        float entity_x, entity_y;
+        char cause[32];
+    } death_data;
+
+    struct {
+        float spawn_x, spawn_y;
+    } spawn_data;
+
+    struct {
+        char action[16];
+        uint8_t pressed;
+        double duration;
+    } input_data;
+};
+#pragma pack(pop)
+
 // Event Logger for replay-friendly format with player ID and timestamps
 class EventLogger {
 public:
@@ -116,7 +148,161 @@ public:
                           " duration=" + std::to_string(duration);
         logEvent("INPUT", playerId, data);
     }
+
+    // Log remote events received from network (with original timestamp and player ID)
+    static void logRemoteEvent(const NetworkEventMessage& msg) {
+        double timestamp = static_cast<double>(msg.timestamp) / 1000.0; // Convert from milliseconds
+        std::string eventData;
+
+        switch (msg.event_type) {
+            case GameEventType::Collision:
+                eventData = "entity1_pos=(" + std::to_string(msg.collision_data.entity1_x) + "," +
+                           std::to_string(msg.collision_data.entity1_y) + ") " +
+                           "entity2_pos=(" + std::to_string(msg.collision_data.entity2_x) + "," +
+                           std::to_string(msg.collision_data.entity2_y) + ")";
+                break;
+
+            case GameEventType::Death:
+                eventData = "entity_pos=(" + std::to_string(msg.death_data.entity_x) + "," +
+                           std::to_string(msg.death_data.entity_y) + ") cause=" + std::string(msg.death_data.cause);
+                break;
+
+            case GameEventType::Spawn:
+                eventData = "spawn_pos=(" + std::to_string(msg.spawn_data.spawn_x) + "," +
+                           std::to_string(msg.spawn_data.spawn_y) + ")";
+                break;
+
+            case GameEventType::Input:
+                eventData = "action=" + std::string(msg.input_data.action) +
+                           " state=" + (msg.input_data.pressed ? "pressed" : "released") +
+                           " duration=" + std::to_string(msg.input_data.duration);
+                break;
+        }
+
+        std::string eventTypeStr = getEventTypeString(msg.event_type);
+        printf("[%.3f] [PLAYER:%d] [%s] %s\n", timestamp, msg.player_id, eventTypeStr.c_str(), eventData.c_str());
+    }
+
+private:
+    static std::string getEventTypeString(GameEventType type) {
+        switch (type) {
+            case GameEventType::Collision: return "COLLISION";
+            case GameEventType::Death: return "DEATH";
+            case GameEventType::Spawn: return "SPAWN";
+            case GameEventType::Input: return "INPUT";
+            default: return "UNKNOWN";
+        }
+    }
 };
+
+// Client-side network event reception system
+static void* gEventReceiveContext = nullptr;
+static void* gEventReceiveSocket = nullptr;
+static std::thread gEventReceiveThread;
+static std::atomic<bool> gEventReceiveActive{false};
+
+// Initialize event reception system
+static bool initializeEventReception() {
+    if (gEventReceiveSocket) return true; // Already initialized
+
+    // Create separate ZMQ context for event reception
+    gEventReceiveContext = zmq_ctx_new();
+    if (!gEventReceiveContext) {
+        LOGE("Failed to create ZMQ context for event reception");
+        return false;
+    }
+
+    gEventReceiveSocket = zmq_socket(gEventReceiveContext, ZMQ_SUB);
+    if (!gEventReceiveSocket) {
+        LOGE("Failed to create event receive socket");
+        zmq_ctx_destroy(gEventReceiveContext);
+        gEventReceiveContext = nullptr;
+        return false;
+    }
+
+    int linger = 0;
+    zmq_setsockopt(gEventReceiveSocket, ZMQ_LINGER, &linger, sizeof(linger));
+
+    // Subscribe to all events
+    zmq_setsockopt(gEventReceiveSocket, ZMQ_SUBSCRIBE, "", 0);
+
+    // Connect to server's event broadcast endpoint
+    std::string host = std::getenv("SERVER_HOST") ? std::getenv("SERVER_HOST") : "127.0.0.1";
+    std::string endpoint = "tcp://" + host + ":5558";
+
+    if (zmq_connect(gEventReceiveSocket, endpoint.c_str()) != 0) {
+        LOGE("Failed to connect to event broadcast endpoint %s: %s", endpoint.c_str(), zmq_strerror(zmq_errno()));
+        zmq_close(gEventReceiveSocket);
+        gEventReceiveSocket = nullptr;
+        return false;
+    }
+
+    LOGI("Connected to event broadcast server at %s", endpoint.c_str());
+    return true;
+}
+
+// Event reception thread
+static void eventReceiveWorker() {
+    gEventReceiveActive.store(true);
+
+    while (gEventReceiveActive.load()) {
+        NetworkEventMessage msg;
+        int bytes = zmq_recv(gEventReceiveSocket, &msg, sizeof(msg), ZMQ_DONTWAIT);
+
+        if (bytes > 0) {
+            // Only process events from other players (not our own events)
+            if (msg.player_id != static_cast<uint32_t>(my_identifier)) {
+                EventLogger::logRemoteEvent(msg);
+            }
+        } else if (bytes == 0) {
+            // No message available
+        } else {
+            int err = zmq_errno();
+            if (err == EAGAIN || err == EWOULDBLOCK) {
+                // No message available, continue
+            } else {
+                LOGE("Event receive error: %s", zmq_strerror(err));
+                break;
+            }
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
+    LOGI("Event reception worker stopped");
+}
+
+// Start event reception system
+static void startEventReception() {
+    if (!initializeEventReception()) {
+        LOGE("Failed to initialize event reception");
+        return;
+    }
+
+    gEventReceiveThread = std::thread(eventReceiveWorker);
+    LOGI("Event reception system started");
+}
+
+// Stop event reception system
+static void stopEventReception() {
+    gEventReceiveActive.store(false);
+
+    if (gEventReceiveThread.joinable()) {
+        gEventReceiveThread.join();
+    }
+
+    if (gEventReceiveSocket) {
+        zmq_close(gEventReceiveSocket);
+        gEventReceiveSocket = nullptr;
+    }
+
+    if (gEventReceiveContext) {
+        zmq_ctx_destroy(gEventReceiveContext);
+        gEventReceiveContext = nullptr;
+    }
+
+    LOGI("Event reception system stopped");
+}
 
 static Engine::Obj::Registry gRegistry;
 static std::unique_ptr<Engine::Obj::NetworkSceneManager> gScene;
@@ -264,24 +450,56 @@ static void handleCollisionEvent(std::shared_ptr<Engine::Event> event) {
     auto collisionEvent = std::static_pointer_cast<Engine::CollisionEvent>(event);
     // Use EventLogger for replay-friendly format with player ID and timestamp
     EventLogger::logCollision(my_identifier, collisionEvent->entity1, collisionEvent->entity2);
+
+    // Send event to server for broadcasting to other clients
+    if (network_active.load()) {
+        std::string eventData = "COLLISION:" + std::to_string(collisionEvent->entity1->getPosX()) + "," +
+                               std::to_string(collisionEvent->entity1->getPosY()) + ";" +
+                               std::to_string(collisionEvent->entity2->getPosX()) + "," +
+                               std::to_string(collisionEvent->entity2->getPosY());
+        network_client.p2pPublishEvent(1, collisionEvent->entity1->getPosX(), collisionEvent->entity1->getPosY(), eventData.c_str());
+    }
 }
 
 static void handleDeathEvent(std::shared_ptr<Engine::Event> event) {
     auto deathEvent = std::static_pointer_cast<Engine::DeathEvent>(event);
     // Use EventLogger for replay-friendly format with player ID and timestamp
     EventLogger::logDeath(my_identifier, deathEvent->entity, deathEvent->cause);
+
+    // Send event to server for broadcasting to other clients
+    if (network_active.load()) {
+        std::string eventData = "DEATH:" + std::to_string(deathEvent->entity->getPosX()) + "," +
+                               std::to_string(deathEvent->entity->getPosY()) + "," + deathEvent->cause;
+        network_client.p2pPublishEvent(2, deathEvent->entity->getPosX(), deathEvent->entity->getPosY(), eventData.c_str());
+    }
 }
 
 static void handleSpawnEvent(std::shared_ptr<Engine::Event> event) {
     auto spawnEvent = std::static_pointer_cast<Engine::SpawnEvent>(event);
     // Use EventLogger for replay-friendly format with player ID and timestamp
     EventLogger::logSpawn(my_identifier, spawnEvent->x, spawnEvent->y);
+
+    // Send event to server for broadcasting to other clients
+    if (network_active.load()) {
+        std::string eventData = "SPAWN:" + std::to_string(spawnEvent->x) + "," + std::to_string(spawnEvent->y);
+        network_client.p2pPublishEvent(3, spawnEvent->x, spawnEvent->y, eventData.c_str());
+    }
 }
 
 static void handleInputEvent(std::shared_ptr<Engine::Event> event) {
     auto inputEvent = std::static_pointer_cast<Engine::InputEvent>(event);
     // Use EventLogger for replay-friendly format with player ID and timestamp
     EventLogger::logInput(my_identifier, inputEvent->action, inputEvent->pressed, inputEvent->duration);
+
+    // Send event to server for broadcasting to other clients
+    if (network_active.load()) {
+        std::string eventData = "INPUT:" + inputEvent->action + "," + (inputEvent->pressed ? "1" : "0") + "," +
+                               std::to_string(inputEvent->duration);
+        // Use current player position as event coordinates
+        float playerX = player_character ? player_character->getPosX() : 0.0f;
+        float playerY = player_character ? player_character->getPosY() : 0.0f;
+        network_client.p2pPublishEvent(4, playerX, playerY, eventData.c_str());
+    }
 }
 
 // Initialize event handlers
@@ -757,6 +975,90 @@ static void update(float dt) {
     // Process queued events
     gEventManager.process();
 
+    // Process network events received from other clients
+    if (network_active.load()) {
+        auto networkEvents = network_client.getPendingNetworkEvents();
+        for (const auto& netEvent : networkEvents) {
+            // Skip our own events
+            if (netEvent.playerId == my_identifier) continue;
+
+            // Parse network event and convert to proper format
+            std::string eventStr = netEvent.extraData;
+            size_t colonPos = eventStr.find(':');
+
+            if (colonPos != std::string::npos) {
+                std::string eventType = eventStr.substr(0, colonPos);
+                std::string eventData = eventStr.substr(colonPos + 1);
+
+                // Convert to NetworkEventMessage format for consistent logging
+                NetworkEventMessage msg{};
+                msg.timestamp = static_cast<uint64_t>(gTimeline.now() * 1000.0);
+                msg.player_id = netEvent.playerId;
+
+                if (eventType == "COLLISION") {
+                    msg.event_type = GameEventType::Collision;
+                    // Parse: x1,y1;x2,y2
+                    size_t semicolonPos = eventData.find(';');
+                    if (semicolonPos != std::string::npos) {
+                        std::string entity1Pos = eventData.substr(0, semicolonPos);
+                        std::string entity2Pos = eventData.substr(semicolonPos + 1);
+
+                        size_t comma1 = entity1Pos.find(',');
+                        size_t comma2 = entity2Pos.find(',');
+                        if (comma1 != std::string::npos && comma2 != std::string::npos) {
+                            msg.collision_data.entity1_x = std::stof(entity1Pos.substr(0, comma1));
+                            msg.collision_data.entity1_y = std::stof(entity1Pos.substr(comma1 + 1));
+                            msg.collision_data.entity2_x = std::stof(entity2Pos.substr(0, comma2));
+                            msg.collision_data.entity2_y = std::stof(entity2Pos.substr(comma2 + 1));
+                            EventLogger::logRemoteEvent(msg);
+                        }
+                    }
+                }
+                else if (eventType == "DEATH") {
+                    msg.event_type = GameEventType::Death;
+                    // Parse: x,y,cause
+                    size_t comma1 = eventData.find(',');
+                    size_t comma2 = eventData.find(',', comma1 + 1);
+                    if (comma1 != std::string::npos && comma2 != std::string::npos) {
+                        msg.death_data.entity_x = std::stof(eventData.substr(0, comma1));
+                        msg.death_data.entity_y = std::stof(eventData.substr(comma1 + 1, comma2 - comma1 - 1));
+                        std::string cause = eventData.substr(comma2 + 1);
+                        strncpy(msg.death_data.cause, cause.c_str(), sizeof(msg.death_data.cause) - 1);
+                        msg.death_data.cause[sizeof(msg.death_data.cause) - 1] = '\0';
+                        EventLogger::logRemoteEvent(msg);
+                    }
+                }
+                else if (eventType == "SPAWN") {
+                    msg.event_type = GameEventType::Spawn;
+                    // Parse: x,y
+                    size_t comma = eventData.find(',');
+                    if (comma != std::string::npos) {
+                        msg.spawn_data.spawn_x = std::stof(eventData.substr(0, comma));
+                        msg.spawn_data.spawn_y = std::stof(eventData.substr(comma + 1));
+                        EventLogger::logRemoteEvent(msg);
+                    }
+                }
+                else if (eventType == "INPUT") {
+                    msg.event_type = GameEventType::Input;
+                    // Parse: action,pressed,duration
+                    size_t comma1 = eventData.find(',');
+                    size_t comma2 = eventData.find(',', comma1 + 1);
+                    if (comma1 != std::string::npos && comma2 != std::string::npos) {
+                        std::string action = eventData.substr(0, comma1);
+                        bool pressed = (eventData.substr(comma1 + 1, comma2 - comma1 - 1) == "1");
+                        double duration = std::stod(eventData.substr(comma2 + 1));
+
+                        strncpy(msg.input_data.action, action.c_str(), sizeof(msg.input_data.action) - 1);
+                        msg.input_data.action[sizeof(msg.input_data.action) - 1] = '\0';
+                        msg.input_data.pressed = pressed ? 1 : 0;
+                        msg.input_data.duration = duration;
+                        EventLogger::logRemoteEvent(msg);
+                    }
+                }
+            }
+        }
+    }
+
     ControlState s;
     s.move_left  = Engine::Input::keyPressed("left");
     s.move_right = Engine::Input::keyPressed("right");
@@ -1089,6 +1391,9 @@ static int LaunchClient(int argc, char* argv[]) {
         LOGE("P2P start failed");
     }
 
+    // Start network event reception system to receive events from other players
+    startEventReception();
+
     gScene = std::make_unique<Engine::Obj::NetworkSceneManager>(gRegistry);
     gLocalObj = gScene->createLocalPlayer(my_identifier,
         player_character->getPosX(), player_character->getPosY(), "media/ghost_meh.png");
@@ -1103,6 +1408,10 @@ static int LaunchClient(int argc, char* argv[]) {
 
     if (gPerf.perfMode) {
         int rc = runPerformanceTests();
+
+        // Cleanup event reception system
+        stopEventReception();
+
         network_client.shutdown();
         { std::lock_guard<std::mutex> lk(gSync.m); gSync.run.store(false); }
         gSync.cv.notify_all();
@@ -1113,6 +1422,9 @@ static int LaunchClient(int argc, char* argv[]) {
     }
 
     int rc = Engine::main(update);
+
+    // Cleanup event reception system
+    stopEventReception();
 
     network_client.shutdown();
     { std::lock_guard<std::mutex> lk(gSync.m); gSync.run.store(false); }

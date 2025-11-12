@@ -83,6 +83,14 @@ struct P2PWorld {
 
 };
 
+struct P2PEvent {
+    P2PHeader h{P2PKind::Player,0}; // Reuse Player kind for simplicity
+    int32_t   player_id{0};
+    uint32_t  event_kind{0}; // Event type identifier
+    float     x{0}, y{0};
+    char      extra_data[128]; // Extra event data as string
+};
+
 #pragma pack(pop)
 
 // ===== Small ZMQ helpers =====
@@ -424,6 +432,27 @@ void Client::p2pPublishPlayer(uint64_t tick,
     zmq_send(pubMine_, &ps, sizeof(ps), ZMQ_DONTWAIT);
 }
 
+void Client::p2pPublishEvent(uint32_t eventKind, float x, float y, const char* extraData) {
+    if (!pubMine_) return;
+    P2PEvent ev{};
+    ev.h.tick = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+    ev.player_id = my_id_.load();
+    ev.event_kind = eventKind;
+    ev.x = x;
+    ev.y = y;
+
+    // Copy extra data with null termination
+    if (extraData) {
+        strncpy(ev.extra_data, extraData, sizeof(ev.extra_data) - 1);
+        ev.extra_data[sizeof(ev.extra_data) - 1] = '\0';
+    } else {
+        ev.extra_data[0] = '\0';
+    }
+
+    zmq_send(pubMine_, &ev, sizeof(ev), ZMQ_DONTWAIT);
+}
+
 void Client::configureAuthorityLayout(int winW, int winH) {
     winW_ = winW; winH_ = winH;
 }
@@ -521,23 +550,40 @@ void Client::p2pRxLoop_() {
                 const auto* h = reinterpret_cast<const P2PHeader*>(buf);
 
                 if (h->kind == P2PKind::Player && static_cast<size_t>(n) >= sizeof(P2PPlayer)) {
-                    const auto* ps = reinterpret_cast<const P2PPlayer*>(buf);
-                    if (ps->player_id != my_id_.load()) {
-                        std::lock_guard<std::mutex> lk(peersMtx_);
-                        auto& rp = peers_[ps->player_id];
-                        rp.id       = ps->player_id;
-                        rp.x        = ps->x;
-                        rp.y        = ps->y;
-                        rp.vx       = ps->vx;
-                        rp.vy       = ps->vy;
-                        rp.facing   = ps->facing;
-                        rp.anim     = ps->anim;
-                        rp.lastTick = ps->h.tick;
-                        rp.lastRecvNs = nowNs();
+                    // Check if this is an event (by checking if it's P2PEvent size)
+                    if (static_cast<size_t>(n) == sizeof(P2PEvent)) {
+                        const auto* ev = reinterpret_cast<const P2PEvent*>(buf);
+                        if (ev->player_id != my_id_.load()) {
+                            // Store network event for retrieval
+                            std::lock_guard<std::mutex> lk(networkEventsMtx_);
+                            NetworkEventData netEvent;
+                            netEvent.eventKind = ev->event_kind;
+                            netEvent.x = ev->x;
+                            netEvent.y = ev->y;
+                            netEvent.extraData = std::string(ev->extra_data);
+                            netEvent.playerId = ev->player_id;
+                            pendingNetworkEvents_.push_back(netEvent);
+                        }
+                    } else if (static_cast<size_t>(n) >= sizeof(P2PPlayer)) {
+                        // Regular player update
+                        const auto* ps = reinterpret_cast<const P2PPlayer*>(buf);
+                        if (ps->player_id != my_id_.load()) {
+                            std::lock_guard<std::mutex> lk(peersMtx_);
+                            auto& rp = peers_[ps->player_id];
+                            rp.id       = ps->player_id;
+                            rp.x        = ps->x;
+                            rp.y        = ps->y;
+                            rp.vx       = ps->vx;
+                            rp.vy       = ps->vy;
+                            rp.facing   = ps->facing;
+                            rp.anim     = ps->anim;
+                            rp.lastTick = ps->h.tick;
+                            rp.lastRecvNs = nowNs();
 
-                        if (!firstSeen.count(ps->player_id)) {
-                            firstSeen.insert(ps->player_id);
-                            std::cout << "[P2P] first packet from peer " << ps->player_id << "\n";
+                            if (!firstSeen.count(ps->player_id)) {
+                                firstSeen.insert(ps->player_id);
+                                std::cout << "[P2P] first packet from peer " << ps->player_id << "\n";
+                            }
                         }
                     }
                 } else if (h->kind == P2PKind::World && static_cast<size_t>(n) >= sizeof(P2PWorld)) {
@@ -621,6 +667,13 @@ std::unordered_map<int, RemotePeerData> Client::p2pSnapshot() {
         out.emplace(id, d);
     }
     return out;
+}
+
+std::vector<Client::NetworkEventData> Client::getPendingNetworkEvents() {
+    std::lock_guard<std::mutex> lk(networkEventsMtx_);
+    std::vector<Client::NetworkEventData> events;
+    events.swap(pendingNetworkEvents_); // Move and clear the pending events
+    return events;
 }
 
 }

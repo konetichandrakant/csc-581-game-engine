@@ -8,6 +8,7 @@
 #include <atomic>
 #include <csignal>
 #include <cstring>
+#include <mutex>
 #include <zmq.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -31,11 +32,42 @@ struct WorldHdr { uint8_t kind{4}; uint64_t tick{0}; uint32_t players{0}; uint32
 struct Hello   { uint8_t kind{1}; uint32_t len{0}; };
 struct Welcome { uint8_t kind{2}; int32_t id{0}; int32_t cmd_port{5555}; int32_t pub_port{5556}; };
 
-enum class P2PKind : uint8_t { PeerReg=3, PeerList=4 };
+enum class P2PKind : uint8_t { PeerReg=3, PeerList=4, GameEvent=5 };
 struct P2PHeader { P2PKind kind; uint64_t t; };
 struct PeerReg { P2PHeader h{P2PKind::PeerReg,0}; int32_t want_list{1}; int32_t player_id{0}; uint16_t pub_port{0}; };
 struct PeerInfo { int32_t id; uint32_t ipv4_be; uint16_t port_be; };
 struct PeerList { P2PHeader h{P2PKind::PeerList,0}; int32_t my_id; uint32_t count; };
+
+// Network Event Protocol for broadcasting game events
+#pragma pack(push,1)
+enum class GameEventType : uint8_t { Collision=1, Death=2, Spawn=3, Input=4 };
+struct NetworkEventMessage {
+    uint8_t kind{5}; // GameEvent
+    uint64_t timestamp{0};
+    uint32_t player_id{0};
+    GameEventType event_type{0};
+
+    // Event-specific data (using unions for memory efficiency)
+    struct {
+        float entity1_x, entity1_y;
+        float entity2_x, entity2_y;
+    } collision_data;
+
+    struct {
+        float entity_x, entity_y;
+        char cause[32]; // Death cause string
+    } death_data;
+
+    struct {
+        float spawn_x, spawn_y;
+    } spawn_data;
+
+    struct {
+        char action[16]; // Action string
+        uint8_t pressed; // Boolean
+        double duration;
+    } input_data;
+};
 #pragma pack(pop)
 
 struct DynPlatform {
@@ -59,36 +91,141 @@ static void on_sigint(int){ running.store(false); }
 static Engine::Timeline gTimeline("ServerTime");
 static Engine::EventManager gEventManager(&gTimeline);
 
+// Network event broadcasting system
+static void* gEventBroadcastSocket = nullptr;
+static std::mutex gEventBroadcastMutex;
+
+// Global client connections for event broadcasting (will be shared with directory_rep thread)
+static std::unordered_map<int32_t, ClientConn>* gGlobalPeers = nullptr;
+static std::mutex* gGlobalPeersMutex = nullptr;
+
+// Initialize event broadcasting system
+static void initializeEventBroadcast(void* zmq_context) {
+    gEventBroadcastSocket = zmq_socket(zmq_context, ZMQ_PUB);
+    int linger = 0;
+    zmq_setsockopt(gEventBroadcastSocket, ZMQ_LINGER, &linger, sizeof(linger));
+    if (zmq_bind(gEventBroadcastSocket, "tcp://*:5558") != 0) {
+        std::cerr << "[EVENTS] Failed to bind event broadcast socket: " << zmq_strerror(zmq_errno()) << std::endl;
+        return;
+    }
+    std::cout << "[EVENTS] Event broadcasting started on port 5558" << std::endl;
+}
+
+// Broadcast event to all connected clients
+static void broadcastEventToClients(const NetworkEventMessage& eventMsg) {
+    if (!gEventBroadcastSocket) return;
+
+    std::lock_guard<std::mutex> lock(gEventBroadcastMutex);
+    zmq_send(gEventBroadcastSocket, &eventMsg, sizeof(eventMsg), 0);
+}
+
+// Convert game events to network format and broadcast
+static void broadcastCollisionEvent(int32_t playerId, float e1x, float e1y, float e2x, float e2y) {
+    NetworkEventMessage msg{};
+    msg.timestamp = static_cast<uint64_t>(gTimeline.now() * 1000.0); // Convert to milliseconds
+    msg.player_id = playerId;
+    msg.event_type = GameEventType::Collision;
+
+    msg.collision_data.entity1_x = e1x;
+    msg.collision_data.entity1_y = e1y;
+    msg.collision_data.entity2_x = e2x;
+    msg.collision_data.entity2_y = e2y;
+
+    broadcastEventToClients(msg);
+}
+
+static void broadcastDeathEvent(int32_t playerId, float x, float y, const std::string& cause) {
+    NetworkEventMessage msg{};
+    msg.timestamp = static_cast<uint64_t>(gTimeline.now() * 1000.0);
+    msg.player_id = playerId;
+    msg.event_type = GameEventType::Death;
+
+    msg.death_data.entity_x = x;
+    msg.death_data.entity_y = y;
+    strncpy(msg.death_data.cause, cause.c_str(), sizeof(msg.death_data.cause) - 1);
+    msg.death_data.cause[sizeof(msg.death_data.cause) - 1] = '\0';
+
+    broadcastEventToClients(msg);
+}
+
+static void broadcastSpawnEvent(int32_t playerId, float x, float y) {
+    NetworkEventMessage msg{};
+    msg.timestamp = static_cast<uint64_t>(gTimeline.now() * 1000.0);
+    msg.player_id = playerId;
+    msg.event_type = GameEventType::Spawn;
+
+    msg.spawn_data.spawn_x = x;
+    msg.spawn_data.spawn_y = y;
+
+    broadcastEventToClients(msg);
+}
+
+static void broadcastInputEvent(int32_t playerId, const std::string& action, bool pressed, double duration) {
+    NetworkEventMessage msg{};
+    msg.timestamp = static_cast<uint64_t>(gTimeline.now() * 1000.0);
+    msg.player_id = playerId;
+    msg.event_type = GameEventType::Input;
+
+    strncpy(msg.input_data.action, action.c_str(), sizeof(msg.input_data.action) - 1);
+    msg.input_data.action[sizeof(msg.input_data.action) - 1] = '\0';
+    msg.input_data.pressed = pressed ? 1 : 0;
+    msg.input_data.duration = duration;
+
+    broadcastEventToClients(msg);
+}
+
 // Event handler functions for server
 static void handleServerCollisionEvent(std::shared_ptr<Engine::Event> event) {
     auto collisionEvent = std::static_pointer_cast<Engine::CollisionEvent>(event);
-    std::cout << "[SERVER] Collision event detected - broadcasting to clients" << std::endl;
 
-    // Here you could add code to broadcast collision events to connected clients
-    // For now, we'll just log it
+    // For now, use player ID 1 as placeholder - in a real implementation,
+    // you'd track which client owns which entities
+    int32_t playerId = 1;
+
+    float e1x = collisionEvent->entity1->getPosX();
+    float e1y = collisionEvent->entity1->getPosY();
+    float e2x = collisionEvent->entity2->getPosX();
+    float e2y = collisionEvent->entity2->getPosY();
+
+    std::cout << "[SERVER] Broadcasting collision event from player " << playerId << std::endl;
+    broadcastCollisionEvent(playerId, e1x, e1y, e2x, e2y);
 }
 
 static void handleServerDeathEvent(std::shared_ptr<Engine::Event> event) {
     auto deathEvent = std::static_pointer_cast<Engine::DeathEvent>(event);
-    std::cout << "[SERVER] Death event: " << deathEvent->cause << " at position ("
-              << deathEvent->entity->getPosX() << ", " << deathEvent->entity->getPosY() << ")" << std::endl;
 
-    // Here you could add code to broadcast death events to connected clients
+    int32_t playerId = 1; // Placeholder - would be determined by which client owns the entity
+    float x = deathEvent->entity->getPosX();
+    float y = deathEvent->entity->getPosY();
+    const std::string& cause = deathEvent->cause;
+
+    std::cout << "[SERVER] Broadcasting death event from player " << playerId << ": " << cause
+              << " at (" << x << ", " << y << ")" << std::endl;
+    broadcastDeathEvent(playerId, x, y, cause);
 }
 
 static void handleServerSpawnEvent(std::shared_ptr<Engine::Event> event) {
     auto spawnEvent = std::static_pointer_cast<Engine::SpawnEvent>(event);
-    std::cout << "[SERVER] Spawn event: Entity spawned at (" << spawnEvent->x << ", " << spawnEvent->y << ")" << std::endl;
 
-    // Here you could add code to broadcast spawn events to connected clients
+    int32_t playerId = 1; // Placeholder
+    float x = spawnEvent->x;
+    float y = spawnEvent->y;
+
+    std::cout << "[SERVER] Broadcasting spawn event from player " << playerId << ": (" << x << ", " << y << ")" << std::endl;
+    broadcastSpawnEvent(playerId, x, y);
 }
 
 static void handleServerInputEvent(std::shared_ptr<Engine::Event> event) {
     auto inputEvent = std::static_pointer_cast<Engine::InputEvent>(event);
-    std::cout << "[SERVER] Input event: " << inputEvent->action << " - "
-              << (inputEvent->pressed ? "pressed" : "released") << std::endl;
 
-    // Here you could add code to process input events and broadcast state changes
+    int32_t playerId = 1; // Placeholder
+    const std::string& action = inputEvent->action;
+    bool pressed = inputEvent->pressed;
+    double duration = inputEvent->duration;
+
+    std::cout << "[SERVER] Broadcasting input event from player " << playerId << ": " << action
+              << " " << (pressed ? "pressed" : "released") << std::endl;
+    broadcastInputEvent(playerId, action, pressed, duration);
 }
 
 // Initialize server event handlers
@@ -299,6 +436,9 @@ int main(int argc, char* argv[]) {
     void* ctx = zmq_ctx_new();
     if (!ctx) { std::cerr << "zmq_ctx_new failed\n"; return 1; }
 
+    // Initialize event broadcasting system
+    initializeEventBroadcast(ctx);
+
     std::thread t1([&]{ world_pub(ctx); });
     std::thread t2([&]{ hello_rep(ctx); });
     std::thread t3([&]{ directory_rep(ctx); });
@@ -308,6 +448,12 @@ int main(int argc, char* argv[]) {
     if (t1.joinable()) t1.join();
     if (t2.joinable()) t2.join();
     if (t3.joinable()) t3.join();
+
+    // Cleanup event broadcasting socket
+    if (gEventBroadcastSocket) {
+        zmq_close(gEventBroadcastSocket);
+        gEventBroadcastSocket = nullptr;
+    }
 
     zmq_ctx_term(ctx);
     WSACleanup();
