@@ -84,6 +84,40 @@ static Engine::Client network_client;
 static std::atomic<bool> network_active{false};
 static int my_identifier=0;
 
+// Event Logger for replay-friendly format with player ID and timestamps
+class EventLogger {
+public:
+    static void logEvent(const std::string& eventType, int playerId, const std::string& eventData) {
+        double timestamp = gTimeline.now(); // Get current timeline timestamp
+        printf("[%.3f] [PLAYER:%d] [%s] %s\n", timestamp, playerId, eventType.c_str(), eventData.c_str());
+    }
+
+    static void logCollision(int playerId, Engine::Entity* entity1, Engine::Entity* entity2) {
+        std::string data = "entity1_pos=(" + std::to_string(entity1->getPosX()) + "," +
+                          std::to_string(entity1->getPosY()) + ") " +
+                          "entity2_pos=(" + std::to_string(entity2->getPosX()) + "," +
+                          std::to_string(entity2->getPosY()) + ")";
+        logEvent("COLLISION", playerId, data);
+    }
+
+    static void logDeath(int playerId, Engine::Entity* entity, const std::string& cause) {
+        std::string data = "entity_pos=(" + std::to_string(entity->getPosX()) + "," +
+                          std::to_string(entity->getPosY()) + ") cause=" + cause;
+        logEvent("DEATH", playerId, data);
+    }
+
+    static void logSpawn(int playerId, float x, float y) {
+        std::string data = "spawn_pos=(" + std::to_string(x) + "," + std::to_string(y) + ")";
+        logEvent("SPAWN", playerId, data);
+    }
+
+    static void logInput(int playerId, const std::string& action, bool pressed, double duration = 0.0) {
+        std::string data = "action=" + action + " state=" + (pressed ? "pressed" : "released") +
+                          " duration=" + std::to_string(duration);
+        logEvent("INPUT", playerId, data);
+    }
+};
+
 static Engine::Obj::Registry gRegistry;
 static std::unique_ptr<Engine::Obj::NetworkSceneManager> gScene;
 static Engine::Obj::ObjectId gLocalObj = Engine::Obj::kInvalidId;
@@ -228,6 +262,10 @@ static void update(float dt);
 // Event handler functions
 static void handleCollisionEvent(std::shared_ptr<Engine::Event> event) {
     auto collisionEvent = std::static_pointer_cast<Engine::CollisionEvent>(event);
+    // Use EventLogger for replay-friendly format with player ID and timestamp
+    EventLogger::logCollision(my_identifier, collisionEvent->entity1, collisionEvent->entity2);
+
+    // Keep existing LOGI for compatibility
     LOGI("Collision detected between entities at positions (%.2f, %.2f) and (%.2f, %.2f)",
          collisionEvent->entity1->getPosX(), collisionEvent->entity1->getPosY(),
          collisionEvent->entity2->getPosX(), collisionEvent->entity2->getPosY());
@@ -235,17 +273,29 @@ static void handleCollisionEvent(std::shared_ptr<Engine::Event> event) {
 
 static void handleDeathEvent(std::shared_ptr<Engine::Event> event) {
     auto deathEvent = std::static_pointer_cast<Engine::DeathEvent>(event);
+    // Use EventLogger for replay-friendly format with player ID and timestamp
+    EventLogger::logDeath(my_identifier, deathEvent->entity, deathEvent->cause);
+
+    // Keep existing LOGI for compatibility
     LOGI("Entity died at position (%.2f, %.2f) - Cause: %s",
          deathEvent->entity->getPosX(), deathEvent->entity->getPosY(), deathEvent->cause.c_str());
 }
 
 static void handleSpawnEvent(std::shared_ptr<Engine::Event> event) {
     auto spawnEvent = std::static_pointer_cast<Engine::SpawnEvent>(event);
+    // Use EventLogger for replay-friendly format with player ID and timestamp
+    EventLogger::logSpawn(my_identifier, spawnEvent->x, spawnEvent->y);
+
+    // Keep existing LOGI for compatibility
     LOGI("Entity spawned at position (%.2f, %.2f)", spawnEvent->x, spawnEvent->y);
 }
 
 static void handleInputEvent(std::shared_ptr<Engine::Event> event) {
     auto inputEvent = std::static_pointer_cast<Engine::InputEvent>(event);
+    // Use EventLogger for replay-friendly format with player ID and timestamp
+    EventLogger::logInput(my_identifier, inputEvent->action, inputEvent->pressed, inputEvent->duration);
+
+    // Keep existing LOGI for compatibility
     LOGI("Input event: %s - %s (duration: %.2f)",
          inputEvent->action.c_str(),
          inputEvent->pressed ? "pressed" : "released",
