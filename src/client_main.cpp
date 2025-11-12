@@ -264,42 +264,24 @@ static void handleCollisionEvent(std::shared_ptr<Engine::Event> event) {
     auto collisionEvent = std::static_pointer_cast<Engine::CollisionEvent>(event);
     // Use EventLogger for replay-friendly format with player ID and timestamp
     EventLogger::logCollision(my_identifier, collisionEvent->entity1, collisionEvent->entity2);
-
-    // Keep existing LOGI for compatibility
-    LOGI("Collision detected between entities at positions (%.2f, %.2f) and (%.2f, %.2f)",
-         collisionEvent->entity1->getPosX(), collisionEvent->entity1->getPosY(),
-         collisionEvent->entity2->getPosX(), collisionEvent->entity2->getPosY());
 }
 
 static void handleDeathEvent(std::shared_ptr<Engine::Event> event) {
     auto deathEvent = std::static_pointer_cast<Engine::DeathEvent>(event);
     // Use EventLogger for replay-friendly format with player ID and timestamp
     EventLogger::logDeath(my_identifier, deathEvent->entity, deathEvent->cause);
-
-    // Keep existing LOGI for compatibility
-    LOGI("Entity died at position (%.2f, %.2f) - Cause: %s",
-         deathEvent->entity->getPosX(), deathEvent->entity->getPosY(), deathEvent->cause.c_str());
 }
 
 static void handleSpawnEvent(std::shared_ptr<Engine::Event> event) {
     auto spawnEvent = std::static_pointer_cast<Engine::SpawnEvent>(event);
     // Use EventLogger for replay-friendly format with player ID and timestamp
     EventLogger::logSpawn(my_identifier, spawnEvent->x, spawnEvent->y);
-
-    // Keep existing LOGI for compatibility
-    LOGI("Entity spawned at position (%.2f, %.2f)", spawnEvent->x, spawnEvent->y);
 }
 
 static void handleInputEvent(std::shared_ptr<Engine::Event> event) {
     auto inputEvent = std::static_pointer_cast<Engine::InputEvent>(event);
     // Use EventLogger for replay-friendly format with player ID and timestamp
     EventLogger::logInput(my_identifier, inputEvent->action, inputEvent->pressed, inputEvent->duration);
-
-    // Keep existing LOGI for compatibility
-    LOGI("Input event: %s - %s (duration: %.2f)",
-         inputEvent->action.c_str(),
-         inputEvent->pressed ? "pressed" : "released",
-         inputEvent->duration);
 }
 
 // Initialize event handlers
@@ -321,7 +303,6 @@ static void createSpawnPoints() {
     };
 
     make(EDGE_PADDING + 60, Engine::WINDOW_HEIGHT - 300);
-    make(Engine::WINDOW_WIDTH * 0.5f, Engine::WINDOW_HEIGHT - 260);
     make(Engine::WINDOW_WIDTH - EDGE_PADDING - 80, Engine::WINDOW_HEIGHT - 300);
 }
 
