@@ -1,6 +1,7 @@
 
 #include "NetworkSceneManager.hpp"
 #include <algorithm>
+#include <vector>
 
 namespace Engine::Obj {
     
