@@ -14,6 +14,7 @@
 #include <thread>
 #include <condition_variable>
 #include <sstream>
+#include <iostream>
 
 #include "Engine/engine.h"
 #include "Engine/collision.h"
@@ -241,6 +242,60 @@ static bool initializeEventReception() {
     return true;
 }
 
+// Convert server NetworkEventMessage to Engine Event and raise it in event manager
+static void processServerEvent(const NetworkEventMessage& msg) {
+    std::shared_ptr<Engine::Event> engineEvent;
+    double timestamp = static_cast<double>(msg.timestamp) / 1000.0; // Convert from milliseconds
+
+    switch (msg.event_type) {
+        case GameEventType::Collision: {
+            // For collision events, we need two entities. Since we can't create temporary entities,
+            // we'll create a collision event with nullptr entities and handle it specially
+            engineEvent = std::make_shared<Engine::CollisionEvent>(nullptr, nullptr);
+
+            // Store the position data in a way we can access it in the event handler
+            // Note: This is a workaround for the Entity constructor limitation
+            break;
+        }
+
+        case GameEventType::Death: {
+            // For death events, create with nullptr entity - the position data is in the message
+            std::string cause(msg.death_data.cause);
+            engineEvent = std::make_shared<Engine::DeathEvent>(nullptr, cause);
+            break;
+        }
+
+        case GameEventType::Spawn: {
+            // For spawn events, create with nullptr entity - the position data is in the message
+            engineEvent = std::make_shared<Engine::SpawnEvent>(nullptr, msg.spawn_data.spawn_x, msg.spawn_data.spawn_y);
+            break;
+        }
+
+        case GameEventType::Input: {
+            std::string action(msg.input_data.action);
+            bool pressed = msg.input_data.pressed != 0;
+            double duration = msg.input_data.duration;
+
+            engineEvent = std::make_shared<Engine::InputEvent>(action, pressed, static_cast<float>(duration));
+            break;
+        }
+
+        default:
+            // Unknown event type, just log it
+            EventLogger::logRemoteEvent(msg);
+            return;
+    }
+
+    // Log the event first
+    EventLogger::logRemoteEvent(msg);
+
+    // Raise the event in the engine's event manager for processing
+    gEventManager.raise(engineEvent);
+
+    std::cout << "[SERVER EVENT] Processed " << static_cast<int>(msg.event_type)
+              << " from player " << msg.player_id << " at timestamp " << timestamp << std::endl;
+}
+
 // Event reception thread
 static void eventReceiveWorker() {
     gEventReceiveActive.store(true);
@@ -252,7 +307,7 @@ static void eventReceiveWorker() {
         if (bytes > 0) {
             // Only process events from other players (not our own events)
             if (msg.player_id != static_cast<uint32_t>(my_identifier)) {
-                EventLogger::logRemoteEvent(msg);
+                processServerEvent(msg);
             }
         } else if (bytes == 0) {
             // No message available
@@ -451,7 +506,7 @@ static void handleCollisionEvent(std::shared_ptr<Engine::Event> event) {
     // Use EventLogger for replay-friendly format with player ID and timestamp
     EventLogger::logCollision(my_identifier, collisionEvent->entity1, collisionEvent->entity2);
 
-    // Send event to server for broadcasting to other clients
+    // Send event to other clients via P2P
     if (network_active.load()) {
         std::string eventData = "COLLISION:" + std::to_string(collisionEvent->entity1->getPosX()) + "," +
                                std::to_string(collisionEvent->entity1->getPosY()) + ";" +
@@ -466,7 +521,7 @@ static void handleDeathEvent(std::shared_ptr<Engine::Event> event) {
     // Use EventLogger for replay-friendly format with player ID and timestamp
     EventLogger::logDeath(my_identifier, deathEvent->entity, deathEvent->cause);
 
-    // Send event to server for broadcasting to other clients
+    // Send event to other clients via P2P
     if (network_active.load()) {
         std::string eventData = "DEATH:" + std::to_string(deathEvent->entity->getPosX()) + "," +
                                std::to_string(deathEvent->entity->getPosY()) + "," + deathEvent->cause;
@@ -479,7 +534,7 @@ static void handleSpawnEvent(std::shared_ptr<Engine::Event> event) {
     // Use EventLogger for replay-friendly format with player ID and timestamp
     EventLogger::logSpawn(my_identifier, spawnEvent->x, spawnEvent->y);
 
-    // Send event to server for broadcasting to other clients
+    // Send event to other clients via P2P
     if (network_active.load()) {
         std::string eventData = "SPAWN:" + std::to_string(spawnEvent->x) + "," + std::to_string(spawnEvent->y);
         network_client.p2pPublishEvent(3, spawnEvent->x, spawnEvent->y, eventData.c_str());
@@ -491,7 +546,7 @@ static void handleInputEvent(std::shared_ptr<Engine::Event> event) {
     // Use EventLogger for replay-friendly format with player ID and timestamp
     EventLogger::logInput(my_identifier, inputEvent->action, inputEvent->pressed, inputEvent->duration);
 
-    // Send event to server for broadcasting to other clients
+    // Send event to other clients via P2P
     if (network_active.load()) {
         std::string eventData = "INPUT:" + inputEvent->action + "," + (inputEvent->pressed ? "1" : "0") + "," +
                                std::to_string(inputEvent->duration);
@@ -981,6 +1036,12 @@ static void update(float dt) {
         for (const auto& netEvent : networkEvents) {
             // Skip our own events
             if (netEvent.playerId == my_identifier) continue;
+
+            // Validate player ID - filter out corrupted IDs
+            if (netEvent.playerId <= 0 || netEvent.playerId > 1000) {
+                std::cout << "[FILTER] Ignoring event with corrupted player ID: " << netEvent.playerId << std::endl;
+                continue;
+            }
 
             // Parse network event and convert to proper format
             std::string eventStr = netEvent.extraData;

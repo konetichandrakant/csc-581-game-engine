@@ -32,6 +32,7 @@ struct WorldHdr { uint8_t kind{4}; uint64_t tick{0}; uint32_t players{0}; uint32
 struct Hello   { uint8_t kind{1}; uint32_t len{0}; };
 struct Welcome { uint8_t kind{2}; int32_t id{0}; int32_t cmd_port{5555}; int32_t pub_port{5556}; };
 
+
 enum class P2PKind : uint8_t { PeerReg=3, PeerList=4, GameEvent=5 };
 struct P2PHeader { P2PKind kind; uint64_t t; };
 struct PeerReg { P2PHeader h{P2PKind::PeerReg,0}; int32_t want_list{1}; int32_t player_id{0}; uint16_t pub_port{0}; };
@@ -312,6 +313,13 @@ static void world_pub(void* ctx) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     zmq_close(pub);
+}
+
+// Server-side event validation - not used since we rely on P2P communication
+// This function is kept for reference but not called
+static void validateNetworkEvents() {
+    // This function validates network events for corrupted data
+    // Since we're using P2P, validation is handled on the client side
 }
 
 // Handle client hello requests and assign unique player IDs

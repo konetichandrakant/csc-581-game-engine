@@ -3,6 +3,9 @@
         "*.rmd": "markdown",
         "unordered_map": "cpp",
         "iostream": "cpp",
-        "vector": "cpp"
+        "vector": "cpp",
+        "cstring": "cpp",
+        "thread": "cpp",
+        "cctype": "cpp"
     }
 }
