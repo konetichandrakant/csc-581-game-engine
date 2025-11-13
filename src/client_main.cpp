@@ -320,9 +320,6 @@ static void processServerEvent(const NetworkEventMessage& msg) {
 
     EventLogger::logRemoteEvent(msg);
     gEventManager.raise(engineEvent);
-
-    std::cout << "[SERVER EVENT] Processed " << static_cast<int>(msg.event_type)
-              << " from player " << msg.player_id << " at timestamp " << timestamp << std::endl;
 }
 
 static void eventReceiveWorker() {
@@ -599,8 +596,6 @@ static uint64_t makeFreshSeed() {
 }
 
 static void startRecording() {
-    std::cout << "[REPLAY] Starting recording - capturing baseline" << std::endl;
-
     gRecording.clear();
 
     gBaseline.entities = captureEntitiesForSnapshot();
@@ -610,13 +605,10 @@ static void startRecording() {
 
     reseedRNG(gBaseline.rngSeed);
     gIsRecording = true;
-
-    std::cout << "[REPLAY] Baseline captured with " << gBaseline.entities.size() << " entities" << std::endl;
 }
 
 static void stopRecording() {
     gIsRecording = false;
-    std::cout << "[REPLAY] Stopped recording - captured " << gRecording.size() << " frames" << std::endl;
 }
 
 static void recordFrame(double dt) {
@@ -629,11 +621,8 @@ static void recordFrame(double dt) {
 
 static void beginReplay() {
     if (!gBaseline.valid || gRecording.empty()) {
-        std::cout << "[REPLAY] No valid recording to replay" << std::endl;
         return;
     }
-
-    std::cout << "[REPLAY] Starting replay - applying baseline" << std::endl;
 
     setNetworkingPaused(true);
     clearClientTransient();
@@ -645,14 +634,11 @@ static void beginReplay() {
 
     gReplayIndex = 0;
     gIsReplaying = true;
-
-    std::cout << "[REPLAY] Replay started with " << gRecording.size() << " frames" << std::endl;
 }
 
 static void endReplay() {
     gIsReplaying = false;
     setNetworkingPaused(false);
-    std::cout << "[REPLAY] Replay ended - returning to live mode" << std::endl;
 }
 
 static void stepReplayOneFrame() {
@@ -758,9 +744,7 @@ static void handleInputEvent(std::shared_ptr<Engine::Event> event) {
             }
         }
 
-        std::cout << "[REPLAY] Applied input: " << inputEvent->action
-                  << " " << (inputEvent->pressed ? "pressed" : "released") << std::endl;
-    }
+      }
 
     if (network_active.load()) {
         std::string eventData = "INPUT:" + inputEvent->action + "," + (inputEvent->pressed ? "1" : "0") + "," +
@@ -768,7 +752,6 @@ static void handleInputEvent(std::shared_ptr<Engine::Event> event) {
         float playerX = player_character ? player_character->getPosX() : 0.0f;
         float playerY = player_character ? player_character->getPosY() : 0.0f;
 
-        std::cout << "[DEBUG] Sending INPUT event: " << eventData << " from player " << my_identifier << std::endl;
         network_client.p2pPublishEvent(4, playerX, playerY, eventData.c_str());
     }
 }
@@ -1278,16 +1261,13 @@ static void update(float dt) {
             if (netEvent.playerId == my_identifier) continue;
 
             if (netEvent.playerId <= 0 || netEvent.playerId > 1000) {
-                std::cout << "[FILTER] Ignoring event with corrupted player ID: " << netEvent.playerId << std::endl;
                 continue;
             }
 
             std::string eventStr = netEvent.extraData;
             size_t colonPos = eventStr.find(':');
 
-            std::cout << "[DEBUG] Processing P2P event from player " << netEvent.playerId
-                      << " kind=" << netEvent.eventKind << " data='" << eventStr << "'" << std::endl;
-
+    
             if (colonPos != std::string::npos) {
                 std::string eventType = eventStr.substr(0, colonPos);
                 std::string eventData = eventStr.substr(colonPos + 1);
@@ -1352,8 +1332,6 @@ static void update(float dt) {
                         EventLogger::logRemoteEvent(msg);
                     }
                 }
-            } else {
-                std::cout << "[DEBUG] Event format issue - no colon found in '" << eventStr << "'" << std::endl;
             }
         }
     }
@@ -1517,20 +1495,17 @@ physics_and_rendering:
             case PlayMode::Live: {
                 startRecording();
                 gMode = PlayMode::Recording;
-                std::cout << "[REPLAY] Mode: Live → Recording (Press S again to start replay)" << std::endl;
             } break;
 
             case PlayMode::Recording: {
                 stopRecording();
                 beginReplay();
                 gMode = PlayMode::Replaying;
-                std::cout << "[REPLAY] Mode: Recording → Replaying (Press S to return to live)" << std::endl;
             } break;
 
             case PlayMode::Replaying: {
                 endReplay();
                 gMode = PlayMode::Live;
-                std::cout << "[REPLAY] Mode: Replaying → Live (Press S to start new recording)" << std::endl;
             } break;
         }
         s_pressed = true;
@@ -1541,7 +1516,6 @@ physics_and_rendering:
     if ((gMode == PlayMode::Replaying) && Engine::Input::keyPressed("pause")) {
         endReplay();
         gMode = PlayMode::Live;
-        std::cout << "[REPLAY] Replay cancelled by ESC - returning to live" << std::endl;
     }
 
     if (!gRemoteAvatarTx) {
@@ -1673,12 +1647,6 @@ static int LaunchClient(int argc, char* argv[]) {
     mapInputs();
     initializeGameWorld();
     initializeEventHandlers();
-
-    std::cout << "[REPLAY] One-Key Replay System Ready" << std::endl;
-    std::cout << "[REPLAY] Press 'S' to start recording" << std::endl;
-    std::cout << "[REPLAY] Press 'S' again to stop recording and start replay" << std::endl;
-    std::cout << "[REPLAY] Press 'S' during replay to return to live mode" << std::endl;
-    std::cout << "[REPLAY] Press ESC during replay to cancel replay" << std::endl;
 
     std::string host = std::getenv("SERVER_HOST") ? std::getenv("SERVER_HOST") : "127.0.0.1";
     if (!network_client.start(host.c_str(), "Player"))
