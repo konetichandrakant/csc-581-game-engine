@@ -1255,7 +1255,10 @@ static void update(float dt) {
             return;
         }
 
-        goto physics_and_rendering;
+        // During replay, we only apply recorded positions and skip
+        // any additional physics/movement updates to prevent double-movement
+        // This ensures platforms/hands move at constant speed without slowdown
+        return;
     }
 
     if (gMode == PlayMode::Recording) {
