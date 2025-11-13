@@ -1628,7 +1628,6 @@ physics_and_rendering:
 }
 
 
-
 static void mapInputs() {
     Engine::Input::map("left",  SDL_SCANCODE_A);
     Engine::Input::map("left",  SDL_SCANCODE_LEFT);
@@ -1663,53 +1662,7 @@ static int runPerformanceTests() {
     return 0;
 }
 
-static void parseArguments(int argc, char* argv[]) {
-    for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--perf") == 0) {
-            gPerf.perfMode = true;
-            if (i + 1 < argc && argv[i+1][0] != '-') {
-                gPerf.csv = argv[++i];
-            }
-        } else if (strcmp(argv[i], "--strategy") == 0 && i + 1 < argc) {
-            gPerf.strategy = argv[++i];
-        } else if (strcmp(argv[i], "--publish") == 0 && i + 1 < argc) {
-            gPerf.publishHz = atoi(argv[++i]);
-        } else if (strcmp(argv[i], "--movers") == 0 && i + 1 < argc) {
-            gPerf.movers = atoi(argv[++i]);
-        } else if (strcmp(argv[i], "--frames") == 0 && i + 1 < argc) {
-            gPerf.frames = atoi(argv[++i]);
-        } else if (strcmp(argv[i], "--reps") == 0 && i + 1 < argc) {
-            gPerf.reps = atoi(argv[++i]);
-        } else if (strcmp(argv[i], "--headless") == 0) {
-            gPerf.headless = true;
-        } else if (strcmp(argv[i], "--experiments") == 0) {
-            gPerf.runExperiments = true;
-        } else if (strcmp(argv[i], "--input-delta") == 0) {
-            gNetConfig.useInputDelta = true;
-        } else if (strcmp(argv[i], "--disconnect-handling") == 0) {
-            gNetConfig.enableDisconnectHandling = true;
-        } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
-            LOGI("Usage: %s [options]", argv[0]);
-            LOGI("Options:");
-            LOGI("  --perf [file]     Run performance tests (output to CSV file)");
-            LOGI("  --strategy STR    Strategy: pose, inputs, or json");
-            LOGI("  --publish HZ      Publishing rate in Hz");
-            LOGI("  --movers N        Number of moving objects");
-            LOGI("  --frames N        Number of frames per test");
-            LOGI("  --reps N          Number of repetitions");
-            LOGI("  --headless        Run in headless mode");
-            LOGI("  --experiments     Run performance experiments");
-            LOGI("  --input-delta     Use input delta networking");
-            LOGI("  --disconnect-handling Enable disconnect handling");
-            LOGI("  --help, -h        Show this help");
-            exit(0);
-        }
-    }
-}
-
 static int LaunchClient(int argc, char* argv[]) {
-    parseArguments(argc, argv);
-
     if (gPerf.perfMode && gPerf.headless) {
         SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "offscreen");
     }
