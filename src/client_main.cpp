@@ -24,6 +24,7 @@
 #include "Engine/timeline.h"
 #include "Engine/event_manager.h"
 #include "Engine/events.h"
+#include "Engine/replay_manager.h"
 
 #include "Engine/object/Registry.hpp"
 #include "Engine/object/NetworkSceneManager.hpp"
@@ -79,7 +80,12 @@ static const float PLATFORM_DEPTH = 80.0f;
 
 static Engine::Timeline gTimeline("GameTime");
 static Engine::EventManager gEventManager(&gTimeline);
+static std::unique_ptr<Engine::ReplayManager> gReplayManager;
 static bool paused=false, p_pressed=false, half_pressed=false, one_pressed=false, dbl_pressed=false;
+
+// Replay system variables
+static bool replay_mode = false;
+static std::string current_session_recording;
 
 static Engine::Client network_client;
 static std::atomic<bool> network_active{false};
@@ -546,13 +552,35 @@ static void handleInputEvent(std::shared_ptr<Engine::Event> event) {
     // Use EventLogger for replay-friendly format with player ID and timestamp
     EventLogger::logInput(my_identifier, inputEvent->action, inputEvent->pressed, inputEvent->duration);
 
-    // Send event to other clients via P2P
+    // During replay mode, apply input to player character
+    if (replay_mode && player_character) {
+        // Update control state for replay
+        {
+            std::lock_guard<std::mutex> g(control_mx);
+            if (inputEvent->action == "move_left") {
+                current_controls.move_left = inputEvent->pressed;
+            } else if (inputEvent->action == "move_right") {
+                current_controls.move_right = inputEvent->pressed;
+            } else if (inputEvent->action == "jump") {
+                current_controls.activate_jump = inputEvent->pressed;
+            }
+        }
+
+        // Debug: Log input being applied during replay
+        std::cout << "[REPLAY] Applied input: " << inputEvent->action
+                  << " " << (inputEvent->pressed ? "pressed" : "released") << std::endl;
+    }
+
+    // Send event to other clients via P2P (only in live mode)
     if (network_active.load()) {
         std::string eventData = "INPUT:" + inputEvent->action + "," + (inputEvent->pressed ? "1" : "0") + "," +
                                std::to_string(inputEvent->duration);
         // Use current player position as event coordinates
         float playerX = player_character ? player_character->getPosX() : 0.0f;
         float playerY = player_character ? player_character->getPosY() : 0.0f;
+
+        // Debug: Log when input events are sent
+        std::cout << "[DEBUG] Sending INPUT event: " << eventData << " from player " << my_identifier << std::endl;
         network_client.p2pPublishEvent(4, playerX, playerY, eventData.c_str());
     }
 }
@@ -1021,6 +1049,59 @@ static void handleSurfaceCollision(Engine::Entity* e, SurfaceAttachment& a,
     if (!a.attached) { a.surface=nullptr; a.x_offset=0.0f; }
 }
 
+// Update window title based on current mode
+static void updateWindowTitle() {
+    if (Engine::window) {
+        std::string title;
+        if (replay_mode) {
+            title = "📺 REPLAY MODE - " + current_session_recording + " [ESC to exit]";
+        } else {
+            title = "Ghost Runner (Client) " + std::to_string(my_identifier) + " [Press 'S' to stop & replay]";
+        }
+        SDL_SetWindowTitle(Engine::window, title.c_str());
+    }
+}
+
+// Handle stopping multiplayer and starting replay
+static void handleStopAndReplay() {
+    LOGI("=== STOPPING MULTIPLAYER AND STARTING REPLAY ===");
+
+    // Stop recording current session
+    if (gReplayManager && gReplayManager->isRecording()) {
+        gReplayManager->stopRecording();
+        LOGI("Stopped recording session: %s", current_session_recording.c_str());
+    }
+
+    // Disconnect from multiplayer
+    network_active.store(false);
+    network_client.shutdown();
+    LOGI("Disconnected from multiplayer network");
+
+    // Stop event reception system
+    stopEventReception();
+
+    // Clear current game state and reset to beginning
+    resetPlayerPosition();
+    gTimeline.reset();
+    gTimeline.setScale(1.0f); // Reset timeline speed to normal
+
+    // Switch to replay mode
+    replay_mode = true;
+    LOGI("Switched to replay mode");
+
+    // Start playback of the recorded session
+    if (gReplayManager) {
+        gReplayManager->startPlayback(current_session_recording);
+        LOGI("Started playback of session: %s", current_session_recording.c_str());
+    }
+
+    // Show replay notification on screen
+    LOGI("=== REPLAY MODE ACTIVE - Press ESC to exit ===");
+
+    // Update window title to show replay mode
+    updateWindowTitle();
+}
+
 static SDL_Texture* gRemoteAvatarTx = nullptr;
 // Main game update loop - handle input, physics, networking, and rendering
 static void update(float dt) {
@@ -1029,6 +1110,17 @@ static void update(float dt) {
 
     // Process queued events
     gEventManager.process();
+
+    // Update ReplayManager if active
+    if (gReplayManager) {
+        gReplayManager->update();
+    }
+
+    // Skip network events and input processing when in replay mode
+    if (replay_mode) {
+        // In replay mode, skip network events but continue with physics and rendering
+        goto physics_and_rendering;
+    }
 
     // Process network events received from other clients
     if (network_active.load()) {
@@ -1046,6 +1138,10 @@ static void update(float dt) {
             // Parse network event and convert to proper format
             std::string eventStr = netEvent.extraData;
             size_t colonPos = eventStr.find(':');
+
+            // Debug: Log received event details
+            std::cout << "[DEBUG] Processing P2P event from player " << netEvent.playerId
+                      << " kind=" << netEvent.eventKind << " data='" << eventStr << "'" << std::endl;
 
             if (colonPos != std::string::npos) {
                 std::string eventType = eventStr.substr(0, colonPos);
@@ -1116,15 +1212,26 @@ static void update(float dt) {
                         EventLogger::logRemoteEvent(msg);
                     }
                 }
+            } else {
+                // Debug: Events without colon separator - this indicates format issue
+                std::cout << "[DEBUG] Event format issue - no colon found in '" << eventStr << "'" << std::endl;
             }
         }
     }
 
+physics_and_rendering:
     ControlState s;
-    s.move_left  = Engine::Input::keyPressed("left");
-    s.move_right = Engine::Input::keyPressed("right");
-    s.activate_jump = Engine::Input::keyPressed("jump");
-    { std::lock_guard<std::mutex> g(control_mx); current_controls = s; }
+
+    // During replay mode, don't override control state with keyboard input
+    if (!replay_mode) {
+        s.move_left  = Engine::Input::keyPressed("left");
+        s.move_right = Engine::Input::keyPressed("right");
+        s.activate_jump = Engine::Input::keyPressed("jump");
+        { std::lock_guard<std::mutex> g(control_mx); current_controls = s; }
+    } else {
+        // In replay mode, use the current control state as is (modified by replay events)
+        { std::lock_guard<std::mutex> g(control_mx); s = current_controls; }
+    }
 
     // Track input state changes and trigger input events
     static ControlState last_s;
@@ -1270,6 +1377,17 @@ static void update(float dt) {
     if (Engine::Input::keyPressed("speed_one"))  { if(!one_pressed)  gTimeline.setScale(1.0f); one_pressed=true; } else one_pressed=false;
     if (Engine::Input::keyPressed("speed_dbl"))  { if(!dbl_pressed)  gTimeline.setScale(2.0f); dbl_pressed=true; } else dbl_pressed=false;
 
+    // Handle 'S' key - stop multiplayer and start replay
+    static bool s_pressed = false;
+    if (Engine::Input::keyPressed("stop_replay") && !s_pressed) {
+        if (!replay_mode && network_active.load()) {
+            handleStopAndReplay();
+        }
+        s_pressed = true;
+    } else if (!Engine::Input::keyPressed("stop_replay")) {
+        s_pressed = false;
+    }
+
     if (!gRemoteAvatarTx) {
         if (SDL_Texture* base = loadTexture("media/ghost_meh.png")) {
             gRemoteAvatarTx = resizeTexture(base, int(256*GHOST_SCALE), int(256*GHOST_SCALE));
@@ -1349,6 +1467,8 @@ static void update(float dt) {
     if (Engine::Input::keyPressed(SDL_SCANCODE_ESCAPE)) Engine::stop();
 }
 
+
+
 static void mapInputs() {
     Engine::Input::map("left",  SDL_SCANCODE_A);
     Engine::Input::map("left",  SDL_SCANCODE_LEFT);
@@ -1358,6 +1478,7 @@ static void mapInputs() {
     Engine::Input::map("jump",  SDL_SCANCODE_UP);
     Engine::Input::map("jump",  SDL_SCANCODE_SPACE);
     Engine::Input::map("pause",      SDL_SCANCODE_P);
+    Engine::Input::map("stop_replay", SDL_SCANCODE_S);
     Engine::Input::map("speed_half", SDL_SCANCODE_Z);
     Engine::Input::map("speed_one",  SDL_SCANCODE_X);
     Engine::Input::map("speed_dbl",  SDL_SCANCODE_C);
@@ -1440,6 +1561,17 @@ static int LaunchClient(int argc, char* argv[]) {
     initializeGameWorld();
     initializeEventHandlers();
 
+    // Initialize ReplayManager for session recording
+    gReplayManager = std::make_unique<Engine::ReplayManager>(&gEventManager, &gTimeline);
+    gEventManager.setReplayManager(gReplayManager.get());
+
+    // Start recording session with timestamp
+    auto now = std::chrono::system_clock::now();
+    auto timestamp = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
+    current_session_recording = "session_" + std::to_string(timestamp);
+    gReplayManager->startRecording(current_session_recording);
+    LOGI("Started recording session: %s", current_session_recording.c_str());
+
     std::string host = std::getenv("SERVER_HOST") ? std::getenv("SERVER_HOST") : "127.0.0.1";
     if (!network_client.start(host.c_str(), "Player"))
         LOGE("Server connection failed (%s)", host.c_str());
@@ -1464,7 +1596,12 @@ static int LaunchClient(int argc, char* argv[]) {
     gWorldWorker  = std::thread(worldWorker);
 
 
-    std::string title = gPerf.perfMode ? "Performance Test" : ("Ghost Runner (Client) " + std::to_string(my_identifier));
+    std::string title;
+    if (gPerf.perfMode) {
+        title = "Performance Test";
+    } else {
+        title = "Ghost Runner (Client) " + std::to_string(my_identifier) + " [Press 'S' to stop & replay]";
+    }
     if (Engine::window) SDL_SetWindowTitle(Engine::window, title.c_str());
 
     if (gPerf.perfMode) {

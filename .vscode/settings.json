@@ -6,6 +6,11 @@
         "vector": "cpp",
         "cstring": "cpp",
         "thread": "cpp",
-        "cctype": "cpp"
+        "cctype": "cpp",
+        "cstdlib": "cpp",
+        "cstdint": "cpp",
+        "atomic": "cpp",
+        "mutex": "cpp",
+        "algorithm": "cpp"
     }
 }

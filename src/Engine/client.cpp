@@ -60,7 +60,7 @@ struct P2PEvent {
     int32_t   player_id{0};
     uint32_t  event_kind{0};       // 0=collision, 1=death, 2=spawn, 3=input
     float     x{0}, y{0};          // For spawn/collision position
-    char      extra_data[48]{0};   // For cause, action, etc.
+    char      extra_data[128]{0};  // For cause, action, etc. (increased from 48 to 128)
 };
 
 struct P2DRegister {
