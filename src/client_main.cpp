@@ -1255,9 +1255,6 @@ static void update(float dt) {
             return;
         }
 
-        // During replay, we only apply recorded positions and skip
-        // any additional physics/movement updates to prevent double-movement
-        // This ensures platforms/hands move at constant speed without slowdown
         return;
     }
 
