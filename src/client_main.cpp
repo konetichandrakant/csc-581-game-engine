@@ -78,6 +78,7 @@ static bool     gIsRecording = false;
 
 static size_t   gReplayIndex = 0;
 static bool     gIsReplaying = false;
+static bool     gReplayLooping = false;
 
 static double   gGameTime = 0.0;
 static double   gAccumulator = 0.0;
@@ -647,11 +648,16 @@ static void endReplay() {
 
 static void stepReplayOneFrame() {
     if (gReplayIndex >= gRecording.size()) {
-        endReplay();
-        gMode = PlayMode::Live;
-        Engine::setRecordingIndicatorVisible(false);
-        Engine::setPlaybackIndicatorVisible(false);
-        return;
+        if (gReplayLooping) {
+            beginReplay();
+            return;
+        } else {
+            endReplay();
+            gMode = PlayMode::Live;
+            Engine::setRecordingIndicatorVisible(false);
+            Engine::setPlaybackIndicatorVisible(false);
+            return;
+        }
     }
 
     const Frame& f = gRecording[gReplayIndex];
@@ -1248,6 +1254,40 @@ static void update(float dt) {
 
     gEventManager.process();
 
+    static bool s_pressed = false;
+    if (Engine::Input::keyPressed("stop_replay") && !s_pressed) {
+        switch (gMode) {
+            case PlayMode::Live: {
+                startRecording();
+                gMode = PlayMode::Recording;
+            } break;
+
+            case PlayMode::Recording: {
+                stopRecording();
+                beginReplay();
+                gReplayLooping = true;
+                gMode = PlayMode::Replaying;
+            } break;
+
+            case PlayMode::Replaying: {
+                endReplay();
+                gReplayLooping = false;
+                gMode = PlayMode::Live;
+            } break;
+        }
+        s_pressed = true;
+    } else if (!Engine::Input::keyPressed("stop_replay")) {
+        s_pressed = false;
+    }
+
+    if ((gMode == PlayMode::Replaying) && Engine::Input::keyPressed("pause")) {
+        endReplay();
+        gReplayLooping = false;
+        gMode = PlayMode::Live;
+        Engine::setRecordingIndicatorVisible(false);
+        Engine::setPlaybackIndicatorVisible(false);
+    }
+
     if (gMode == PlayMode::Replaying) {
         stepReplayOneFrame();
         if (!gIsReplaying) {
@@ -1494,37 +1534,6 @@ physics_and_rendering:
     if (Engine::Input::keyPressed("speed_half")) { if(!half_pressed) gTimeline.setScale(0.5f); half_pressed=true; } else half_pressed=false;
     if (Engine::Input::keyPressed("speed_one"))  { if(!one_pressed)  gTimeline.setScale(1.0f); one_pressed=true; } else one_pressed=false;
     if (Engine::Input::keyPressed("speed_dbl"))  { if(!dbl_pressed)  gTimeline.setScale(2.0f); dbl_pressed=true; } else dbl_pressed=false;
-
-    static bool s_pressed = false;
-    if (Engine::Input::keyPressed("stop_replay") && !s_pressed) {
-        switch (gMode) {
-            case PlayMode::Live: {
-                startRecording();
-                gMode = PlayMode::Recording;
-            } break;
-
-            case PlayMode::Recording: {
-                stopRecording();
-                beginReplay();
-                gMode = PlayMode::Replaying;
-            } break;
-
-            case PlayMode::Replaying: {
-                endReplay();
-                gMode = PlayMode::Live;
-            } break;
-        }
-        s_pressed = true;
-    } else if (!Engine::Input::keyPressed("stop_replay")) {
-        s_pressed = false;
-    }
-
-    if ((gMode == PlayMode::Replaying) && Engine::Input::keyPressed("pause")) {
-        endReplay();
-        gMode = PlayMode::Live;
-        Engine::setRecordingIndicatorVisible(false);
-        Engine::setPlaybackIndicatorVisible(false);
-    }
 
     if (!gRemoteAvatarTx) {
         if (SDL_Texture* base = loadTexture("media/ghost_meh.png")) {
