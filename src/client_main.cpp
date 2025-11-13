@@ -605,10 +605,12 @@ static void startRecording() {
 
     reseedRNG(gBaseline.rngSeed);
     gIsRecording = true;
+    Engine::setRecordingIndicatorVisible(true);
 }
 
 static void stopRecording() {
     gIsRecording = false;
+    Engine::setRecordingIndicatorVisible(false);
 }
 
 static void recordFrame(double dt) {
@@ -634,17 +636,21 @@ static void beginReplay() {
 
     gReplayIndex = 0;
     gIsReplaying = true;
+    Engine::setPlaybackIndicatorVisible(true);
 }
 
 static void endReplay() {
     gIsReplaying = false;
     setNetworkingPaused(false);
+    Engine::setPlaybackIndicatorVisible(false);
 }
 
 static void stepReplayOneFrame() {
     if (gReplayIndex >= gRecording.size()) {
         endReplay();
         gMode = PlayMode::Live;
+        Engine::setRecordingIndicatorVisible(false);
+        Engine::setPlaybackIndicatorVisible(false);
         return;
     }
 
@@ -1220,11 +1226,11 @@ static void updateWindowTitle() {
     if (Engine::window) {
         std::string title;
         if (gMode == PlayMode::Replaying) {
-            title = "REPLAY MODE - One-Key S Replay [S to exit]";
+            title = "REPLAY MODE (client) " + std::to_string(my_identifier);
         } else if (gMode == PlayMode::Recording) {
-            title = "RECORDING MODE - One-Key S Replay [S to stop & replay]";
+            title = "RECORDING MODE (client) " + std::to_string(my_identifier);
         } else {
-            title = "Ghost Runner (Client) " + std::to_string(my_identifier) + " [Press 'S' to stop & replay]";
+            title = "Ghost Runner (Client) " + std::to_string(my_identifier);
         }
         SDL_SetWindowTitle(Engine::window, title.c_str());
     }
@@ -1516,6 +1522,8 @@ physics_and_rendering:
     if ((gMode == PlayMode::Replaying) && Engine::Input::keyPressed("pause")) {
         endReplay();
         gMode = PlayMode::Live;
+        Engine::setRecordingIndicatorVisible(false);
+        Engine::setPlaybackIndicatorVisible(false);
     }
 
     if (!gRemoteAvatarTx) {
@@ -1674,7 +1682,7 @@ static int LaunchClient(int argc, char* argv[]) {
     if (gPerf.perfMode) {
         title = "Performance Test";
     } else {
-        title = "Ghost Runner (Client) " + std::to_string(my_identifier) + " [Press 'S' to stop & replay]";
+        title = "Ghost Runner (Client) " + std::to_string(my_identifier);
     }
     if (Engine::window) SDL_SetWindowTitle(Engine::window, title.c_str());
 
