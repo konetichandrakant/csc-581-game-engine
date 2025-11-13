@@ -13,6 +13,7 @@
         "mutex": "cpp",
         "algorithm": "cpp",
         "cmath": "cpp",
-        "numeric": "cpp"
+        "numeric": "cpp",
+        "chrono": "cpp"
     }
 }

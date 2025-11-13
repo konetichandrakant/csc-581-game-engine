@@ -80,6 +80,10 @@ static size_t   gReplayIndex = 0;
 static bool     gIsReplaying = false;
 static bool     gReplayLooping = false;
 
+static int      gDeathCount = 0;
+static int      gRecordingDeathCount = 0;
+static int      gReplayDeathCount = 0;
+
 static double   gGameTime = 0.0;
 static double   gAccumulator = 0.0;
 static uint64_t gFrameNo = 0;
@@ -598,6 +602,7 @@ static uint64_t makeFreshSeed() {
 
 static void startRecording() {
     gRecording.clear();
+    gRecordingDeathCount = 0;
 
     gBaseline.entities = captureEntitiesForSnapshot();
     gBaseline.cam = captureCamera();
@@ -626,6 +631,8 @@ static void beginReplay() {
     if (!gBaseline.valid || gRecording.empty()) {
         return;
     }
+
+    gReplayDeathCount = gRecordingDeathCount;
 
     setNetworkingPaused(true);
     clearClientTransient();
@@ -722,6 +729,17 @@ static void handleCollisionEvent(std::shared_ptr<Engine::Event> event) {
 static void handleDeathEvent(std::shared_ptr<Engine::Event> event) {
     auto deathEvent = std::static_pointer_cast<Engine::DeathEvent>(event);
     EventLogger::logDeath(my_identifier, deathEvent->entity, deathEvent->cause);
+
+    switch (gMode) {
+        case PlayMode::Live:
+            gDeathCount++;
+            break;
+        case PlayMode::Recording:
+            gRecordingDeathCount++;
+            break;
+        case PlayMode::Replaying:
+            break;
+    }
 
     if (network_active.load()) {
         std::string eventData = "DEATH:" + std::to_string(deathEvent->entity->getPosX()) + "," +
@@ -1248,6 +1266,89 @@ static void handleStopAndReplay() {
 
 static SDL_Texture* gRemoteAvatarTx = nullptr;
 
+static void drawDigit(int digit, float x, float y, float size, Uint8 r, Uint8 g, Uint8 b) {
+    if (digit < 0 || digit > 9) return;
+
+    Uint8 oldR, oldG, oldB, oldA;
+    SDL_GetRenderDrawColor(Engine::renderer, &oldR, &oldG, &oldB, &oldA);
+    SDL_SetRenderDrawColor(Engine::renderer, r, g, b, 255);
+
+    SDL_FRect segments[7];
+    float thickness = size / 8.0f;
+
+    segments[0] = {x + thickness, y, size - 2*thickness, thickness};
+    segments[1] = {x + size - thickness, y, thickness, size/2 - thickness/2};
+    segments[2] = {x + size - thickness, y + size/2 + thickness/2, thickness, size/2 - thickness/2};
+    segments[3] = {x + thickness, y + size - thickness, size - 2*thickness, thickness};
+    segments[4] = {x, y + size/2 + thickness/2, thickness, size/2 - thickness/2};
+    segments[5] = {x, y, thickness, size/2 - thickness/2};
+    segments[6] = {x + thickness, y + size/2 - thickness/2, size - 2*thickness, thickness};
+
+    bool digitPatterns[10][7] = {
+        {1,1,1,1,1,1,0},
+        {0,1,1,0,0,0,0},
+        {1,1,0,1,1,0,1},
+        {1,1,1,1,0,0,1},
+        {0,1,1,1,0,1,1},
+        {1,0,1,1,0,1,1},
+        {1,0,1,1,1,1,1},
+        {1,1,1,0,0,0,0},
+        {1,1,1,1,1,1,1},
+        {1,1,1,1,0,1,1}
+    };
+
+    for (int i = 0; i < 7; i++) {
+        if (digitPatterns[digit][i]) {
+            SDL_RenderFillRect(Engine::renderer, &segments[i]);
+        }
+    }
+
+    SDL_SetRenderDrawColor(Engine::renderer, oldR, oldG, oldB, oldA);
+}
+
+static void drawDeathCounter() {
+    int deathCount;
+    const char* prefix;
+
+    switch (gMode) {
+        case PlayMode::Replaying:
+            deathCount = gReplayDeathCount;
+            prefix = "DEATH RATE: ";
+            break;
+        case PlayMode::Recording:
+        case PlayMode::Live:
+        default:
+            deathCount = gDeathCount;
+            prefix = "DEATHS: ";
+            break;
+    }
+
+    float startX = 1550.0f;
+    float startY = 30.0f;
+    float digitSize = 40.0f;
+    float spacing = 45.0f;
+
+    Uint8 colorR = 255, colorG = 255, colorB = 255;
+
+    int tempCount = deathCount;
+    int digitPositions[10];
+    int numDigits = 0;
+
+    if (tempCount == 0) {
+        digitPositions[0] = 0;
+        numDigits = 1;
+    } else {
+        while (tempCount > 0) {
+            digitPositions[numDigits++] = tempCount % 10;
+            tempCount /= 10;
+        }
+    }
+
+    for (int i = numDigits - 1; i >= 0; i--) {
+        drawDigit(digitPositions[i], startX + (numDigits - 1 - i) * spacing, startY, digitSize, colorR, colorG, colorB);
+    }
+}
+
 static void update(float dt) {
     gTimeline.tick();
     gNowSeconds += dt;
@@ -1313,7 +1414,7 @@ static void update(float dt) {
             std::string eventStr = netEvent.extraData;
             size_t colonPos = eventStr.find(':');
 
-    
+
             if (colonPos != std::string::npos) {
                 std::string eventType = eventStr.substr(0, colonPos);
                 std::string eventData = eventStr.substr(colonPos + 1);
@@ -1661,6 +1762,9 @@ static int LaunchClient(int argc, char* argv[]) {
     if (!Engine::init(gPerf.perfMode ? "Performance Test" : "Ghost Runner — Client")) {
         LOGE("Engine init failed: %s", SDL_GetError()); return 1;
     }
+
+    Engine::gameOverlayRenderer = drawDeathCounter;
+
     mapInputs();
     initializeGameWorld();
     initializeEventHandlers();

@@ -102,4 +102,10 @@ namespace Engine {
     void setRecordingIndicatorVisible(bool visible);
     void setPlaybackIndicatorVisible(bool visible);
 
+    /*
+     * Function pointer for game-specific overlay rendering (like death counter)
+     * Called after entities are drawn but before SDL_RenderPresent
+     */
+    extern void (*gameOverlayRenderer)();
+
 }

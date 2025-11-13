@@ -18,6 +18,7 @@ namespace Engine {
     Timeline* timeline;
     static bool sShowRecordingIndicator = false;
     static bool sShowPlaybackIndicator = false;
+    void (*gameOverlayRenderer)() = nullptr;
 
     void setBackgroundColor(int r, int g, int b) {
         BACKGROUND_COLOR[0] = r;
@@ -112,6 +113,10 @@ namespace Engine {
                 }
 
                 SDL_SetRenderDrawColor(renderer, r, g, b, a);
+            }
+
+            if (gameOverlayRenderer) {
+                gameOverlayRenderer();
             }
 
             SDL_RenderPresent(renderer);
