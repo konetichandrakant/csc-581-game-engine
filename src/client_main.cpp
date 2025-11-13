@@ -37,18 +37,15 @@
 #include <SDL3_image/SDL_image.h>
 #include <numeric>
 #include <cmath>
-
-// ===================== ONE-KEY S REPLAY SYSTEM =====================
 #include <random>
 #include <cstdint>
 
-// ---------- Minimal serializable structs ----------
 struct EntityState {
     uint32_t id;
     float x, y;
     float vx, vy;
-    int   spriteId;    // optional
-    bool  alive;       // optional
+    int   spriteId;
+    bool  alive;
 
     EntityState() : id(0), x(0), y(0), vx(0), vy(0), spriteId(0), alive(false) {}
     EntityState(uint32_t _id, float _x, float _y, float _vx, float _vy, int _spriteId = 0, bool _alive = true)
@@ -65,7 +62,6 @@ struct Frame {
     double dt;
     std::vector<EntityState> entities;
     CameraState cam;
-
     Frame() : dt(0.0f) {}
 };
 
@@ -76,7 +72,6 @@ struct Baseline {
     bool valid = false;
 };
 
-// ---------- Global replay/record state ----------
 static Baseline gBaseline;
 static std::vector<Frame> gRecording;
 static bool     gIsRecording = false;
@@ -88,7 +83,6 @@ static double   gGameTime = 0.0;
 static double   gAccumulator = 0.0;
 static uint64_t gFrameNo = 0;
 
-// ---------- Play mode for single-key S flow ----------
 enum class PlayMode { Live, Recording, Replaying };
 static PlayMode gMode = PlayMode::Live;
 
@@ -138,21 +132,18 @@ static Engine::EventManager gEventManager(&gTimeline);
 static std::unique_ptr<Engine::ReplayManager> gReplayManager;
 static bool paused=false, p_pressed=false, half_pressed=false, one_pressed=false, dbl_pressed=false;
 
-
 static Engine::Client network_client;
 static std::atomic<bool> network_active{false};
 static int my_identifier=0;
 
-// Network Event Protocol for receiving events from server
 #pragma pack(push,1)
 enum class GameEventType : uint8_t { Collision=1, Death=2, Spawn=3, Input=4 };
 struct NetworkEventMessage {
-    uint8_t kind{5}; // GameEvent
+    uint8_t kind{5};
     uint64_t timestamp{0};
     uint32_t player_id{0};
     GameEventType event_type{0};
 
-    // Event-specific data
     struct {
         float entity1_x, entity1_y;
         float entity2_x, entity2_y;
@@ -175,11 +166,10 @@ struct NetworkEventMessage {
 };
 #pragma pack(pop)
 
-// Event Logger for replay-friendly format with player ID and timestamps
 class EventLogger {
 public:
     static void logEvent(const std::string& eventType, int playerId, const std::string& eventData) {
-        double timestamp = gTimeline.now(); // Get current timeline timestamp
+        double timestamp = gTimeline.now();
         printf("[%.3f] [PLAYER:%d] [%s] %s\n", timestamp, playerId, eventType.c_str(), eventData.c_str());
     }
 
@@ -208,9 +198,8 @@ public:
         logEvent("INPUT", playerId, data);
     }
 
-    // Log remote events received from network (with original timestamp and player ID)
     static void logRemoteEvent(const NetworkEventMessage& msg) {
-        double timestamp = static_cast<double>(msg.timestamp) / 1000.0; // Convert from milliseconds
+        double timestamp = static_cast<double>(msg.timestamp) / 1000.0;
         std::string eventData;
 
         switch (msg.event_type) {
@@ -254,17 +243,14 @@ private:
     }
 };
 
-// Client-side network event reception system
 static void* gEventReceiveContext = nullptr;
 static void* gEventReceiveSocket = nullptr;
 static std::thread gEventReceiveThread;
 static std::atomic<bool> gEventReceiveActive{false};
 
-// Initialize event reception system
 static bool initializeEventReception() {
-    if (gEventReceiveSocket) return true; // Already initialized
+    if (gEventReceiveSocket) return true;
 
-    // Create separate ZMQ context for event reception
     gEventReceiveContext = zmq_ctx_new();
     if (!gEventReceiveContext) {
         LOGE("Failed to create ZMQ context for event reception");
@@ -281,11 +267,8 @@ static bool initializeEventReception() {
 
     int linger = 0;
     zmq_setsockopt(gEventReceiveSocket, ZMQ_LINGER, &linger, sizeof(linger));
-
-    // Subscribe to all events
     zmq_setsockopt(gEventReceiveSocket, ZMQ_SUBSCRIBE, "", 0);
 
-    // Connect to server's event broadcast endpoint
     std::string host = std::getenv("SERVER_HOST") ? std::getenv("SERVER_HOST") : "127.0.0.1";
     std::string endpoint = "tcp://" + host + ":5558";
 
@@ -300,31 +283,23 @@ static bool initializeEventReception() {
     return true;
 }
 
-// Convert server NetworkEventMessage to Engine Event and raise it in event manager
 static void processServerEvent(const NetworkEventMessage& msg) {
     std::shared_ptr<Engine::Event> engineEvent;
-    double timestamp = static_cast<double>(msg.timestamp) / 1000.0; // Convert from milliseconds
+    double timestamp = static_cast<double>(msg.timestamp) / 1000.0;
 
     switch (msg.event_type) {
         case GameEventType::Collision: {
-            // For collision events, we need two entities. Since we can't create temporary entities,
-            // we'll create a collision event with nullptr entities and handle it specially
             engineEvent = std::make_shared<Engine::CollisionEvent>(nullptr, nullptr);
-
-            // Store the position data in a way we can access it in the event handler
-            // Note: This is a workaround for the Entity constructor limitation
             break;
         }
 
         case GameEventType::Death: {
-            // For death events, create with nullptr entity - the position data is in the message
             std::string cause(msg.death_data.cause);
             engineEvent = std::make_shared<Engine::DeathEvent>(nullptr, cause);
             break;
         }
 
         case GameEventType::Spawn: {
-            // For spawn events, create with nullptr entity - the position data is in the message
             engineEvent = std::make_shared<Engine::SpawnEvent>(nullptr, msg.spawn_data.spawn_x, msg.spawn_data.spawn_y);
             break;
         }
@@ -339,22 +314,17 @@ static void processServerEvent(const NetworkEventMessage& msg) {
         }
 
         default:
-            // Unknown event type, just log it
             EventLogger::logRemoteEvent(msg);
             return;
     }
 
-    // Log the event first
     EventLogger::logRemoteEvent(msg);
-
-    // Raise the event in the engine's event manager for processing
     gEventManager.raise(engineEvent);
 
     std::cout << "[SERVER EVENT] Processed " << static_cast<int>(msg.event_type)
               << " from player " << msg.player_id << " at timestamp " << timestamp << std::endl;
 }
 
-// Event reception thread
 static void eventReceiveWorker() {
     gEventReceiveActive.store(true);
 
@@ -363,16 +333,13 @@ static void eventReceiveWorker() {
         int bytes = zmq_recv(gEventReceiveSocket, &msg, sizeof(msg), ZMQ_DONTWAIT);
 
         if (bytes > 0) {
-            // Only process events from other players (not our own events)
             if (msg.player_id != static_cast<uint32_t>(my_identifier)) {
                 processServerEvent(msg);
             }
         } else if (bytes == 0) {
-            // No message available
         } else {
             int err = zmq_errno();
             if (err == EAGAIN || err == EWOULDBLOCK) {
-                // No message available, continue
             } else {
                 LOGE("Event receive error: %s", zmq_strerror(err));
                 break;
@@ -385,7 +352,6 @@ static void eventReceiveWorker() {
     LOGI("Event reception worker stopped");
 }
 
-// Start event reception system
 static void startEventReception() {
     if (!initializeEventReception()) {
         LOGE("Failed to initialize event reception");
@@ -396,7 +362,6 @@ static void startEventReception() {
     LOGI("Event reception system started");
 }
 
-// Stop event reception system
 static void stopEventReception() {
     gEventReceiveActive.store(false);
 
@@ -522,12 +487,9 @@ static bool gScrolling = false;
 static float gScrolledDistance = 0.0f;
 static float gScrollCooldown = 0.0f;
 
-// ===================== ONE-KEY S REPLAY HELPER FUNCTIONS =====================
-
 static std::vector<EntityState> captureEntitiesForSnapshot() {
     std::vector<EntityState> out;
 
-    // Capture main entities with simple IDs
     if (player_character) {
         out.emplace_back(1, player_character->getPosX(), player_character->getPosY(),
                         player_character->getVelocityX(), player_character->getVelocityY(), 0, true);
@@ -562,44 +524,43 @@ static std::vector<EntityState> captureEntitiesForSnapshot() {
 }
 
 static CameraState captureCamera() {
-    // For now, return default camera - you can hook this to your actual camera system
     return CameraState(0.0f, 0.0f, 1.0f);
 }
 
 static void applyEntitiesSnapshot(const std::vector<EntityState>& entities) {
     for (const auto& e : entities) {
         switch(e.id) {
-            case 1: // Player
+            case 1:
                 if (player_character) {
                     player_character->setPos(e.x, e.y);
                     player_character->setVelocity(e.vx, e.vy);
                 }
                 break;
-            case 2: // Horizontal hazard
+            case 2:
                 if (hazard_object) {
                     hazard_object->setPos(e.x, e.y);
                     hazard_object->setVelocity(e.vx, e.vy);
                 }
                 break;
-            case 3: // Vertical hazard
+            case 3:
                 if (hazard_object_v) {
                     hazard_object_v->setPos(e.x, e.y);
                     hazard_object_v->setVelocity(e.vx, e.vy);
                 }
                 break;
-            case 4: // Main platform
+            case 4:
                 if (main_platform) {
                     main_platform->setPos(e.x, e.y);
                     main_platform->setVelocity(e.vx, e.vy);
                 }
                 break;
-            case 5: // Side platform
+            case 5:
                 if (side_platform) {
                     side_platform->setPos(e.x, e.y);
                     side_platform->setVelocity(e.vx, e.vy);
                 }
                 break;
-            case 6: // Floor base
+            case 6:
                 if (floor_base) {
                     floor_base->setPos(e.x, e.y);
                     floor_base->setVelocity(e.vx, e.vy);
@@ -610,8 +571,6 @@ static void applyEntitiesSnapshot(const std::vector<EntityState>& entities) {
 }
 
 static void applyCamera(const CameraState& cam) {
-    // Hook into your camera system here
-    // For now, we'll just store the values
 }
 
 static void reseedRNG(uint64_t seed) {
@@ -619,7 +578,6 @@ static void reseedRNG(uint64_t seed) {
 }
 
 static void clearClientTransient() {
-    // Clear input queues, networking buffers, prediction state
     on_ground = false;
     jump_engaged = false;
     player_attachment = {false, nullptr, 0.0f};
@@ -627,8 +585,6 @@ static void clearClientTransient() {
 }
 
 static void setNetworkingPaused(bool paused) {
-    // For the simple version, we'll just set a flag
-    // You can hook this into your actual networking system
 }
 
 static void resetClientTimers() {
@@ -642,7 +598,6 @@ static uint64_t makeFreshSeed() {
     return 0xC0FFEEULL ^ static_cast<uint64_t>(std::time(nullptr));
 }
 
-// ---------- Recording hooks ----------
 static void startRecording() {
     std::cout << "[REPLAY] Starting recording - capturing baseline" << std::endl;
 
@@ -672,7 +627,6 @@ static void recordFrame(double dt) {
     gRecording.push_back(std::move(f));
 }
 
-// ---------- Replay hooks ----------
 static void beginReplay() {
     if (!gBaseline.valid || gRecording.empty()) {
         std::cout << "[REPLAY] No valid recording to replay" << std::endl;
@@ -710,20 +664,16 @@ static void stepReplayOneFrame() {
 
     const Frame& f = gRecording[gReplayIndex];
 
-    // Apply recorded state
     applyEntitiesSnapshot(f.entities);
     applyCamera(f.cam);
 
-    // Advance time with recorded dt
     gGameTime += f.dt;
     gFrameNo++;
     gReplayIndex++;
 
-    // Update timeline with recorded dt
     gTimeline.tick();
 }
 
-// Load a texture from file with error handling
 static SDL_Texture* loadTexture(const char* path) {
     SDL_Texture* tx = IMG_LoadTexture(Engine::renderer, path);
     if (!tx) {
@@ -732,7 +682,7 @@ static SDL_Texture* loadTexture(const char* path) {
     }
     return tx;
 }
-// Resize a texture to new dimensions using render target
+
 static SDL_Texture* resizeTexture(SDL_Texture* src, int w, int h) {
     if (!src) return nullptr;
     SDL_Texture* out = SDL_CreateTexture(Engine::renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, w, h);
@@ -746,7 +696,6 @@ static SDL_Texture* resizeTexture(SDL_Texture* src, int w, int h) {
     return out;
 }
 
-// Create JSON string for player data transmission
 static std::string createJsonPlayerData(uint64_t tick, float x, float y, float vx, float vy, uint8_t facing, uint8_t anim) {
     std::ostringstream json;
     json << "{\"tick\":" << tick
@@ -759,13 +708,10 @@ static std::string createJsonPlayerData(uint64_t tick, float x, float y, float v
 
 static void update(float dt);
 
-// Event handler functions
 static void handleCollisionEvent(std::shared_ptr<Engine::Event> event) {
     auto collisionEvent = std::static_pointer_cast<Engine::CollisionEvent>(event);
-    // Use EventLogger for replay-friendly format with player ID and timestamp
     EventLogger::logCollision(my_identifier, collisionEvent->entity1, collisionEvent->entity2);
 
-    // Send event to other clients via P2P
     if (network_active.load()) {
         std::string eventData = "COLLISION:" + std::to_string(collisionEvent->entity1->getPosX()) + "," +
                                std::to_string(collisionEvent->entity1->getPosY()) + ";" +
@@ -777,10 +723,8 @@ static void handleCollisionEvent(std::shared_ptr<Engine::Event> event) {
 
 static void handleDeathEvent(std::shared_ptr<Engine::Event> event) {
     auto deathEvent = std::static_pointer_cast<Engine::DeathEvent>(event);
-    // Use EventLogger for replay-friendly format with player ID and timestamp
     EventLogger::logDeath(my_identifier, deathEvent->entity, deathEvent->cause);
 
-    // Send event to other clients via P2P
     if (network_active.load()) {
         std::string eventData = "DEATH:" + std::to_string(deathEvent->entity->getPosX()) + "," +
                                std::to_string(deathEvent->entity->getPosY()) + "," + deathEvent->cause;
@@ -790,27 +734,19 @@ static void handleDeathEvent(std::shared_ptr<Engine::Event> event) {
 
 static void handleSpawnEvent(std::shared_ptr<Engine::Event> event) {
     auto spawnEvent = std::static_pointer_cast<Engine::SpawnEvent>(event);
-    // Use EventLogger for replay-friendly format with player ID and timestamp
     EventLogger::logSpawn(my_identifier, spawnEvent->x, spawnEvent->y);
 
-    // Send event to other clients via P2P
     if (network_active.load()) {
         std::string eventData = "SPAWN:" + std::to_string(spawnEvent->x) + "," + std::to_string(spawnEvent->y);
         network_client.p2pPublishEvent(3, spawnEvent->x, spawnEvent->y, eventData.c_str());
     }
 }
 
-
-
 static void handleInputEvent(std::shared_ptr<Engine::Event> event) {
     auto inputEvent = std::static_pointer_cast<Engine::InputEvent>(event);
-    // Use EventLogger for replay-friendly format with player ID and timestamp
     EventLogger::logInput(my_identifier, inputEvent->action, inputEvent->pressed, inputEvent->duration);
 
-    
-    // During replay mode, apply input to player character
     if (gMode == PlayMode::Replaying && player_character) {
-        // Update control state for replay
         {
             std::lock_guard<std::mutex> g(control_mx);
             if (inputEvent->action == "move_left") {
@@ -822,27 +758,21 @@ static void handleInputEvent(std::shared_ptr<Engine::Event> event) {
             }
         }
 
-        // Debug: Log input being applied during replay
         std::cout << "[REPLAY] Applied input: " << inputEvent->action
                   << " " << (inputEvent->pressed ? "pressed" : "released") << std::endl;
     }
 
-    // Send event to other clients via P2P (only in live mode)
     if (network_active.load()) {
         std::string eventData = "INPUT:" + inputEvent->action + "," + (inputEvent->pressed ? "1" : "0") + "," +
                                std::to_string(inputEvent->duration);
-        // Use current player position as event coordinates
         float playerX = player_character ? player_character->getPosX() : 0.0f;
         float playerY = player_character ? player_character->getPosY() : 0.0f;
 
-        // Debug: Log when input events are sent
         std::cout << "[DEBUG] Sending INPUT event: " << eventData << " from player " << my_identifier << std::endl;
         network_client.p2pPublishEvent(4, playerX, playerY, eventData.c_str());
     }
 }
 
-
-// Initialize event handlers
 static void initializeEventHandlers() {
     gEventManager.registerHandler("collision", handleCollisionEvent);
     gEventManager.registerHandler("death", handleDeathEvent);
@@ -850,7 +780,6 @@ static void initializeEventHandlers() {
     gEventManager.registerHandler("input", handleInputEvent);
 }
 
-// Create player spawn points across the level
 static void createSpawnPoints() {
     auto make = [&](float x, float y) {
         Engine::Obj::GameObject& obj = gRegistry.create();
@@ -901,7 +830,6 @@ static void respawnAtCurrent() {
         player_attachment = {true, main_platform, player_character->getPosX() - main_platform->getPosX()};
         on_ground = true; jump_engaged = false;
 
-        // Trigger spawn event
         auto spawnEvent = std::make_shared<Engine::SpawnEvent>(player_character, spawn.x, spawn.y);
         gEventManager.raise(spawnEvent);
     }
@@ -1295,7 +1223,6 @@ static void handleSurfaceCollision(Engine::Entity* e, SurfaceAttachment& a,
                     a.x_offset = e->getPosX() - s->getPosX();
                     e->setPosX(s->getPosX()+a.x_offset);
 
-                    // Trigger collision event for landing on new platform
                     auto collisionEvent = std::make_shared<Engine::CollisionEvent>(e, s);
                     gEventManager.raise(collisionEvent);
                 }
@@ -1306,7 +1233,6 @@ static void handleSurfaceCollision(Engine::Entity* e, SurfaceAttachment& a,
     if (!a.attached) { a.surface=nullptr; a.x_offset=0.0f; }
 }
 
-// Update window title based on current mode
 static void updateWindowTitle() {
     if (Engine::window) {
         std::string title;
@@ -1321,57 +1247,44 @@ static void updateWindowTitle() {
     }
 }
 
-// Handle stopping multiplayer and starting replay (deprecated - using one-key S system)
 static void handleStopAndReplay() {
     LOGI("=== STOPPING MULTIPLAYER (OLD SYSTEM - Use S key instead) ===");
-    // This function is deprecated - use the new one-key S system instead
 }
 
 static SDL_Texture* gRemoteAvatarTx = nullptr;
-// Main game update loop - handle input, physics, networking, and rendering
+
 static void update(float dt) {
     gTimeline.tick();
     gNowSeconds += dt;
 
-    // Process queued events
     gEventManager.process();
 
-    // ===================== ONE-KEY S REPLAY INTEGRATION =====================
     if (gMode == PlayMode::Replaying) {
-        // In Replay mode: no live networking/simulation, just play recorded frames
         stepReplayOneFrame();
         if (!gIsReplaying) {
-            gMode = PlayMode::Live; // replay auto-finished
-            return; // Skip everything else for this frame
+            gMode = PlayMode::Live;
+            return;
         }
 
-        // Skip all live simulation and go directly to rendering
         goto physics_and_rendering;
     }
 
-    // ---- Live/Recording path ----
     if (gMode == PlayMode::Recording) {
-        // We'll record the frame AFTER live simulation runs
     }
 
-    // Process network events received from other clients
     if (network_active.load()) {
         auto networkEvents = network_client.getPendingNetworkEvents();
         for (const auto& netEvent : networkEvents) {
-            // Skip our own events
             if (netEvent.playerId == my_identifier) continue;
 
-            // Validate player ID - filter out corrupted IDs
             if (netEvent.playerId <= 0 || netEvent.playerId > 1000) {
                 std::cout << "[FILTER] Ignoring event with corrupted player ID: " << netEvent.playerId << std::endl;
                 continue;
             }
 
-            // Parse network event and convert to proper format
             std::string eventStr = netEvent.extraData;
             size_t colonPos = eventStr.find(':');
 
-            // Debug: Log received event details
             std::cout << "[DEBUG] Processing P2P event from player " << netEvent.playerId
                       << " kind=" << netEvent.eventKind << " data='" << eventStr << "'" << std::endl;
 
@@ -1379,14 +1292,12 @@ static void update(float dt) {
                 std::string eventType = eventStr.substr(0, colonPos);
                 std::string eventData = eventStr.substr(colonPos + 1);
 
-                // Convert to NetworkEventMessage format for consistent logging
                 NetworkEventMessage msg{};
                 msg.timestamp = static_cast<uint64_t>(gTimeline.now() * 1000.0);
                 msg.player_id = netEvent.playerId;
 
                 if (eventType == "COLLISION") {
                     msg.event_type = GameEventType::Collision;
-                    // Parse: x1,y1;x2,y2
                     size_t semicolonPos = eventData.find(';');
                     if (semicolonPos != std::string::npos) {
                         std::string entity1Pos = eventData.substr(0, semicolonPos);
@@ -1405,7 +1316,6 @@ static void update(float dt) {
                 }
                 else if (eventType == "DEATH") {
                     msg.event_type = GameEventType::Death;
-                    // Parse: x,y,cause
                     size_t comma1 = eventData.find(',');
                     size_t comma2 = eventData.find(',', comma1 + 1);
                     if (comma1 != std::string::npos && comma2 != std::string::npos) {
@@ -1419,7 +1329,6 @@ static void update(float dt) {
                 }
                 else if (eventType == "SPAWN") {
                     msg.event_type = GameEventType::Spawn;
-                    // Parse: x,y
                     size_t comma = eventData.find(',');
                     if (comma != std::string::npos) {
                         msg.spawn_data.spawn_x = std::stof(eventData.substr(0, comma));
@@ -1429,7 +1338,6 @@ static void update(float dt) {
                 }
                 else if (eventType == "INPUT") {
                     msg.event_type = GameEventType::Input;
-                    // Parse: action,pressed,duration
                     size_t comma1 = eventData.find(',');
                     size_t comma2 = eventData.find(',', comma1 + 1);
                     if (comma1 != std::string::npos && comma2 != std::string::npos) {
@@ -1445,7 +1353,6 @@ static void update(float dt) {
                     }
                 }
             } else {
-                // Debug: Events without colon separator - this indicates format issue
                 std::cout << "[DEBUG] Event format issue - no colon found in '" << eventStr << "'" << std::endl;
             }
         }
@@ -1454,18 +1361,15 @@ static void update(float dt) {
 physics_and_rendering:
     ControlState s;
 
-    // During replay mode, don't override control state with keyboard input
     if (gMode != PlayMode::Replaying) {
         s.move_left  = Engine::Input::keyPressed("left");
         s.move_right = Engine::Input::keyPressed("right");
         s.activate_jump = Engine::Input::keyPressed("jump");
         { std::lock_guard<std::mutex> g(control_mx); current_controls = s; }
     } else {
-        // In replay mode, use the current control state as is (modified by replay events)
         { std::lock_guard<std::mutex> g(control_mx); s = current_controls; }
     }
 
-    // Track input state changes and trigger input events
     static ControlState last_s;
     if (s.move_left != last_s.move_left) {
         auto inputEvent = std::make_shared<Engine::InputEvent>("move_left", s.move_left);
@@ -1490,7 +1394,6 @@ physics_and_rendering:
         player_character->setPosX(tb.x - pb.w - 2.0f);
         if (player_character->getVelocityX()>0) player_character->setVelocityX(0);
 
-        // Trigger collision event
         auto collisionEvent = std::make_shared<Engine::CollisionEvent>(player_character, tombstone);
         gEventManager.raise(collisionEvent);
     }
@@ -1500,7 +1403,6 @@ physics_and_rendering:
         (hazard_object && Engine::Collision::check(player_character, hazard_object)) ||
         (hazard_object_v && Engine::Collision::check(player_character, hazard_object_v))) {
 
-        // Trigger death event
         std::string cause = "unknown";
         if (hazard_object && Engine::Collision::check(player_character, hazard_object)) {
             cause = "hazard_collision";
@@ -1609,19 +1511,16 @@ physics_and_rendering:
     if (Engine::Input::keyPressed("speed_one"))  { if(!one_pressed)  gTimeline.setScale(1.0f); one_pressed=true; } else one_pressed=false;
     if (Engine::Input::keyPressed("speed_dbl"))  { if(!dbl_pressed)  gTimeline.setScale(2.0f); dbl_pressed=true; } else dbl_pressed=false;
 
-    // Handle 'S' key - ONE-KEY REPLAY SYSTEM
     static bool s_pressed = false;
     if (Engine::Input::keyPressed("stop_replay") && !s_pressed) {
         switch (gMode) {
             case PlayMode::Live: {
-                // 1st S: start recording
                 startRecording();
                 gMode = PlayMode::Recording;
                 std::cout << "[REPLAY] Mode: Live → Recording (Press S again to start replay)" << std::endl;
             } break;
 
             case PlayMode::Recording: {
-                // 2nd S: stop recording AND immediately start replay
                 stopRecording();
                 beginReplay();
                 gMode = PlayMode::Replaying;
@@ -1629,7 +1528,6 @@ physics_and_rendering:
             } break;
 
             case PlayMode::Replaying: {
-                // 3rd S: exit replay → back to live
                 endReplay();
                 gMode = PlayMode::Live;
                 std::cout << "[REPLAY] Mode: Replaying → Live (Press S to start new recording)" << std::endl;
@@ -1640,7 +1538,6 @@ physics_and_rendering:
         s_pressed = false;
     }
 
-    // (Optional) ESC to cancel replay early
     if ((gMode == PlayMode::Replaying) && Engine::Input::keyPressed("pause")) {
         endReplay();
         gMode = PlayMode::Live;
@@ -1725,8 +1622,6 @@ physics_and_rendering:
     if (Engine::Input::keyPressed(SDL_SCANCODE_R)) resetPlayerPosition();
     if (Engine::Input::keyPressed(SDL_SCANCODE_ESCAPE)) Engine::stop();
 
-    // ===================== ONE-KEY S REPLAY INTEGRATION =====================
-    // After live simulation runs, record the frame if we're in Recording mode
     if (gMode == PlayMode::Recording) {
         recordFrame(dt);
     }
@@ -1748,6 +1643,7 @@ static void mapInputs() {
     Engine::Input::map("speed_one",  SDL_SCANCODE_X);
     Engine::Input::map("speed_dbl",  SDL_SCANCODE_C);
 }
+
 static int runPerformanceTests() {
     LOGI("Starting performance tests: %s strategy, %d Hz, %d movers, %d frames, %d reps",
          gPerf.strategy.c_str(), gPerf.publishHz, gPerf.movers, gPerf.frames, gPerf.reps);
@@ -1811,7 +1707,6 @@ static void parseArguments(int argc, char* argv[]) {
     }
 }
 
-// Launch the game client with initialization and main loop
 static int LaunchClient(int argc, char* argv[]) {
     parseArguments(argc, argv);
 
@@ -1826,7 +1721,6 @@ static int LaunchClient(int argc, char* argv[]) {
     initializeGameWorld();
     initializeEventHandlers();
 
-    // ===================== ONE-KEY S REPLAY INITIALIZATION =====================
     std::cout << "[REPLAY] One-Key Replay System Ready" << std::endl;
     std::cout << "[REPLAY] Press 'S' to start recording" << std::endl;
     std::cout << "[REPLAY] Press 'S' again to stop recording and start replay" << std::endl;
@@ -1845,7 +1739,6 @@ static int LaunchClient(int argc, char* argv[]) {
         LOGE("P2P start failed");
     }
 
-    // Start network event reception system to receive events from other players
     startEventReception();
 
     gScene = std::make_unique<Engine::Obj::NetworkSceneManager>(gRegistry);
@@ -1855,7 +1748,6 @@ static int LaunchClient(int argc, char* argv[]) {
     gTickThread   = std::thread(tickThread);
     gInputWorker  = std::thread(inputWorker);
     gWorldWorker  = std::thread(worldWorker);
-
 
     std::string title;
     if (gPerf.perfMode) {
@@ -1868,7 +1760,6 @@ static int LaunchClient(int argc, char* argv[]) {
     if (gPerf.perfMode) {
         int rc = runPerformanceTests();
 
-        // Cleanup event reception system
         stopEventReception();
 
         network_client.shutdown();
@@ -1882,7 +1773,6 @@ static int LaunchClient(int argc, char* argv[]) {
 
     int rc = Engine::main(update);
 
-    // Cleanup event reception system
     stopEventReception();
 
     network_client.shutdown();
@@ -1894,6 +1784,7 @@ static int LaunchClient(int argc, char* argv[]) {
 
     return rc;
 }
+
 int main(int argc, char* argv[]) {
     return LaunchClient(argc, argv);
 }
