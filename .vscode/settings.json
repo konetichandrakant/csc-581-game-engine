@@ -11,6 +11,8 @@
         "cstdint": "cpp",
         "atomic": "cpp",
         "mutex": "cpp",
-        "algorithm": "cpp"
+        "algorithm": "cpp",
+        "cmath": "cpp",
+        "numeric": "cpp"
     }
 }

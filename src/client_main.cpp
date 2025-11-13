@@ -38,11 +38,66 @@
 #include <numeric>
 #include <cmath>
 
+// ===================== ONE-KEY S REPLAY SYSTEM =====================
+#include <random>
+#include <cstdint>
+
+// ---------- Minimal serializable structs ----------
+struct EntityState {
+    uint32_t id;
+    float x, y;
+    float vx, vy;
+    int   spriteId;    // optional
+    bool  alive;       // optional
+
+    EntityState() : id(0), x(0), y(0), vx(0), vy(0), spriteId(0), alive(false) {}
+    EntityState(uint32_t _id, float _x, float _y, float _vx, float _vy, int _spriteId = 0, bool _alive = true)
+        : id(_id), x(_x), y(_y), vx(_vx), vy(_vy), spriteId(_spriteId), alive(_alive) {}
+};
+
+struct CameraState {
+    float cx, cy, zoom;
+    CameraState() : cx(0), cy(0), zoom(1.0f) {}
+    CameraState(float _cx, float _cy, float _zoom) : cx(_cx), cy(_cy), zoom(_zoom) {}
+};
+
+struct Frame {
+    double dt;
+    std::vector<EntityState> entities;
+    CameraState cam;
+
+    Frame() : dt(0.0f) {}
+};
+
+struct Baseline {
+    uint64_t rngSeed = 0;
+    CameraState cam{};
+    std::vector<EntityState> entities;
+    bool valid = false;
+};
+
+// ---------- Global replay/record state ----------
+static Baseline gBaseline;
+static std::vector<Frame> gRecording;
+static bool     gIsRecording = false;
+
+static size_t   gReplayIndex = 0;
+static bool     gIsReplaying = false;
+
+static double   gGameTime = 0.0;
+static double   gAccumulator = 0.0;
+static uint64_t gFrameNo = 0;
+
+// ---------- Play mode for single-key S flow ----------
+enum class PlayMode { Live, Recording, Replaying };
+static PlayMode gMode = PlayMode::Live;
+
 static void savePerformanceResults(const std::string& filename);
 static void printPerformanceResults();
 
 #define LOGI(...) do { std::printf(__VA_ARGS__); std::printf("\n"); } while(0)
 #define LOGE(...) do { std::fprintf(stderr, __VA_ARGS__); std::fprintf(stderr, "\n"); } while(0)
+#define LOGW(...) do { std::printf(__VA_ARGS__); std::printf("\n"); } while(0)
 
 static inline int64_t nowNanos() {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -83,9 +138,6 @@ static Engine::EventManager gEventManager(&gTimeline);
 static std::unique_ptr<Engine::ReplayManager> gReplayManager;
 static bool paused=false, p_pressed=false, half_pressed=false, one_pressed=false, dbl_pressed=false;
 
-// Replay system variables
-static bool replay_mode = false;
-static std::string current_session_recording;
 
 static Engine::Client network_client;
 static std::atomic<bool> network_active{false};
@@ -470,6 +522,207 @@ static bool gScrolling = false;
 static float gScrolledDistance = 0.0f;
 static float gScrollCooldown = 0.0f;
 
+// ===================== ONE-KEY S REPLAY HELPER FUNCTIONS =====================
+
+static std::vector<EntityState> captureEntitiesForSnapshot() {
+    std::vector<EntityState> out;
+
+    // Capture main entities with simple IDs
+    if (player_character) {
+        out.emplace_back(1, player_character->getPosX(), player_character->getPosY(),
+                        player_character->getVelocityX(), player_character->getVelocityY(), 0, true);
+    }
+
+    if (hazard_object) {
+        out.emplace_back(2, hazard_object->getPosX(), hazard_object->getPosY(),
+                        hazard_object->getVelocityX(), hazard_object->getVelocityY(), 1, true);
+    }
+
+    if (hazard_object_v) {
+        out.emplace_back(3, hazard_object_v->getPosX(), hazard_object_v->getPosY(),
+                        hazard_object_v->getVelocityX(), hazard_object_v->getVelocityY(), 2, true);
+    }
+
+    if (main_platform) {
+        out.emplace_back(4, main_platform->getPosX(), main_platform->getPosY(),
+                        main_platform->getVelocityX(), main_platform->getVelocityY(), 3, true);
+    }
+
+    if (side_platform) {
+        out.emplace_back(5, side_platform->getPosX(), side_platform->getPosY(),
+                        side_platform->getVelocityX(), side_platform->getVelocityY(), 4, true);
+    }
+
+    if (floor_base) {
+        out.emplace_back(6, floor_base->getPosX(), floor_base->getPosY(),
+                        floor_base->getVelocityX(), floor_base->getVelocityY(), 5, true);
+    }
+
+    return out;
+}
+
+static CameraState captureCamera() {
+    // For now, return default camera - you can hook this to your actual camera system
+    return CameraState(0.0f, 0.0f, 1.0f);
+}
+
+static void applyEntitiesSnapshot(const std::vector<EntityState>& entities) {
+    for (const auto& e : entities) {
+        switch(e.id) {
+            case 1: // Player
+                if (player_character) {
+                    player_character->setPos(e.x, e.y);
+                    player_character->setVelocity(e.vx, e.vy);
+                }
+                break;
+            case 2: // Horizontal hazard
+                if (hazard_object) {
+                    hazard_object->setPos(e.x, e.y);
+                    hazard_object->setVelocity(e.vx, e.vy);
+                }
+                break;
+            case 3: // Vertical hazard
+                if (hazard_object_v) {
+                    hazard_object_v->setPos(e.x, e.y);
+                    hazard_object_v->setVelocity(e.vx, e.vy);
+                }
+                break;
+            case 4: // Main platform
+                if (main_platform) {
+                    main_platform->setPos(e.x, e.y);
+                    main_platform->setVelocity(e.vx, e.vy);
+                }
+                break;
+            case 5: // Side platform
+                if (side_platform) {
+                    side_platform->setPos(e.x, e.y);
+                    side_platform->setVelocity(e.vx, e.vy);
+                }
+                break;
+            case 6: // Floor base
+                if (floor_base) {
+                    floor_base->setPos(e.x, e.y);
+                    floor_base->setVelocity(e.vx, e.vy);
+                }
+                break;
+        }
+    }
+}
+
+static void applyCamera(const CameraState& cam) {
+    // Hook into your camera system here
+    // For now, we'll just store the values
+}
+
+static void reseedRNG(uint64_t seed) {
+    std::srand(static_cast<unsigned>(seed));
+}
+
+static void clearClientTransient() {
+    // Clear input queues, networking buffers, prediction state
+    on_ground = false;
+    jump_engaged = false;
+    player_attachment = {false, nullptr, 0.0f};
+    remote_attachments.clear();
+}
+
+static void setNetworkingPaused(bool paused) {
+    // For the simple version, we'll just set a flag
+    // You can hook this into your actual networking system
+}
+
+static void resetClientTimers() {
+    gGameTime = 0.0;
+    gAccumulator = 0.0;
+    gFrameNo = 0;
+    gTimeline.reset();
+}
+
+static uint64_t makeFreshSeed() {
+    return 0xC0FFEEULL ^ static_cast<uint64_t>(std::time(nullptr));
+}
+
+// ---------- Recording hooks ----------
+static void startRecording() {
+    std::cout << "[REPLAY] Starting recording - capturing baseline" << std::endl;
+
+    gRecording.clear();
+
+    gBaseline.entities = captureEntitiesForSnapshot();
+    gBaseline.cam = captureCamera();
+    gBaseline.rngSeed = makeFreshSeed();
+    gBaseline.valid = true;
+
+    reseedRNG(gBaseline.rngSeed);
+    gIsRecording = true;
+
+    std::cout << "[REPLAY] Baseline captured with " << gBaseline.entities.size() << " entities" << std::endl;
+}
+
+static void stopRecording() {
+    gIsRecording = false;
+    std::cout << "[REPLAY] Stopped recording - captured " << gRecording.size() << " frames" << std::endl;
+}
+
+static void recordFrame(double dt) {
+    Frame f;
+    f.dt = dt;
+    f.entities = captureEntitiesForSnapshot();
+    f.cam = captureCamera();
+    gRecording.push_back(std::move(f));
+}
+
+// ---------- Replay hooks ----------
+static void beginReplay() {
+    if (!gBaseline.valid || gRecording.empty()) {
+        std::cout << "[REPLAY] No valid recording to replay" << std::endl;
+        return;
+    }
+
+    std::cout << "[REPLAY] Starting replay - applying baseline" << std::endl;
+
+    setNetworkingPaused(true);
+    clearClientTransient();
+    resetClientTimers();
+
+    reseedRNG(gBaseline.rngSeed);
+    applyEntitiesSnapshot(gBaseline.entities);
+    applyCamera(gBaseline.cam);
+
+    gReplayIndex = 0;
+    gIsReplaying = true;
+
+    std::cout << "[REPLAY] Replay started with " << gRecording.size() << " frames" << std::endl;
+}
+
+static void endReplay() {
+    gIsReplaying = false;
+    setNetworkingPaused(false);
+    std::cout << "[REPLAY] Replay ended - returning to live mode" << std::endl;
+}
+
+static void stepReplayOneFrame() {
+    if (gReplayIndex >= gRecording.size()) {
+        endReplay();
+        gMode = PlayMode::Live;
+        return;
+    }
+
+    const Frame& f = gRecording[gReplayIndex];
+
+    // Apply recorded state
+    applyEntitiesSnapshot(f.entities);
+    applyCamera(f.cam);
+
+    // Advance time with recorded dt
+    gGameTime += f.dt;
+    gFrameNo++;
+    gReplayIndex++;
+
+    // Update timeline with recorded dt
+    gTimeline.tick();
+}
+
 // Load a texture from file with error handling
 static SDL_Texture* loadTexture(const char* path) {
     SDL_Texture* tx = IMG_LoadTexture(Engine::renderer, path);
@@ -547,13 +800,16 @@ static void handleSpawnEvent(std::shared_ptr<Engine::Event> event) {
     }
 }
 
+
+
 static void handleInputEvent(std::shared_ptr<Engine::Event> event) {
     auto inputEvent = std::static_pointer_cast<Engine::InputEvent>(event);
     // Use EventLogger for replay-friendly format with player ID and timestamp
     EventLogger::logInput(my_identifier, inputEvent->action, inputEvent->pressed, inputEvent->duration);
 
+    
     // During replay mode, apply input to player character
-    if (replay_mode && player_character) {
+    if (gMode == PlayMode::Replaying && player_character) {
         // Update control state for replay
         {
             std::lock_guard<std::mutex> g(control_mx);
@@ -584,6 +840,7 @@ static void handleInputEvent(std::shared_ptr<Engine::Event> event) {
         network_client.p2pPublishEvent(4, playerX, playerY, eventData.c_str());
     }
 }
+
 
 // Initialize event handlers
 static void initializeEventHandlers() {
@@ -1053,8 +1310,10 @@ static void handleSurfaceCollision(Engine::Entity* e, SurfaceAttachment& a,
 static void updateWindowTitle() {
     if (Engine::window) {
         std::string title;
-        if (replay_mode) {
-            title = "📺 REPLAY MODE - " + current_session_recording + " [ESC to exit]";
+        if (gMode == PlayMode::Replaying) {
+            title = "REPLAY MODE - One-Key S Replay [S to exit]";
+        } else if (gMode == PlayMode::Recording) {
+            title = "RECORDING MODE - One-Key S Replay [S to stop & replay]";
         } else {
             title = "Ghost Runner (Client) " + std::to_string(my_identifier) + " [Press 'S' to stop & replay]";
         }
@@ -1062,44 +1321,10 @@ static void updateWindowTitle() {
     }
 }
 
-// Handle stopping multiplayer and starting replay
+// Handle stopping multiplayer and starting replay (deprecated - using one-key S system)
 static void handleStopAndReplay() {
-    LOGI("=== STOPPING MULTIPLAYER AND STARTING REPLAY ===");
-
-    // Stop recording current session
-    if (gReplayManager && gReplayManager->isRecording()) {
-        gReplayManager->stopRecording();
-        LOGI("Stopped recording session: %s", current_session_recording.c_str());
-    }
-
-    // Disconnect from multiplayer
-    network_active.store(false);
-    network_client.shutdown();
-    LOGI("Disconnected from multiplayer network");
-
-    // Stop event reception system
-    stopEventReception();
-
-    // Clear current game state and reset to beginning
-    resetPlayerPosition();
-    gTimeline.reset();
-    gTimeline.setScale(1.0f); // Reset timeline speed to normal
-
-    // Switch to replay mode
-    replay_mode = true;
-    LOGI("Switched to replay mode");
-
-    // Start playback of the recorded session
-    if (gReplayManager) {
-        gReplayManager->startPlayback(current_session_recording);
-        LOGI("Started playback of session: %s", current_session_recording.c_str());
-    }
-
-    // Show replay notification on screen
-    LOGI("=== REPLAY MODE ACTIVE - Press ESC to exit ===");
-
-    // Update window title to show replay mode
-    updateWindowTitle();
+    LOGI("=== STOPPING MULTIPLAYER (OLD SYSTEM - Use S key instead) ===");
+    // This function is deprecated - use the new one-key S system instead
 }
 
 static SDL_Texture* gRemoteAvatarTx = nullptr;
@@ -1111,15 +1336,22 @@ static void update(float dt) {
     // Process queued events
     gEventManager.process();
 
-    // Update ReplayManager if active
-    if (gReplayManager) {
-        gReplayManager->update();
+    // ===================== ONE-KEY S REPLAY INTEGRATION =====================
+    if (gMode == PlayMode::Replaying) {
+        // In Replay mode: no live networking/simulation, just play recorded frames
+        stepReplayOneFrame();
+        if (!gIsReplaying) {
+            gMode = PlayMode::Live; // replay auto-finished
+            return; // Skip everything else for this frame
+        }
+
+        // Skip all live simulation and go directly to rendering
+        goto physics_and_rendering;
     }
 
-    // Skip network events and input processing when in replay mode
-    if (replay_mode) {
-        // In replay mode, skip network events but continue with physics and rendering
-        goto physics_and_rendering;
+    // ---- Live/Recording path ----
+    if (gMode == PlayMode::Recording) {
+        // We'll record the frame AFTER live simulation runs
     }
 
     // Process network events received from other clients
@@ -1223,7 +1455,7 @@ physics_and_rendering:
     ControlState s;
 
     // During replay mode, don't override control state with keyboard input
-    if (!replay_mode) {
+    if (gMode != PlayMode::Replaying) {
         s.move_left  = Engine::Input::keyPressed("left");
         s.move_right = Engine::Input::keyPressed("right");
         s.activate_jump = Engine::Input::keyPressed("jump");
@@ -1377,15 +1609,42 @@ physics_and_rendering:
     if (Engine::Input::keyPressed("speed_one"))  { if(!one_pressed)  gTimeline.setScale(1.0f); one_pressed=true; } else one_pressed=false;
     if (Engine::Input::keyPressed("speed_dbl"))  { if(!dbl_pressed)  gTimeline.setScale(2.0f); dbl_pressed=true; } else dbl_pressed=false;
 
-    // Handle 'S' key - stop multiplayer and start replay
+    // Handle 'S' key - ONE-KEY REPLAY SYSTEM
     static bool s_pressed = false;
     if (Engine::Input::keyPressed("stop_replay") && !s_pressed) {
-        if (!replay_mode && network_active.load()) {
-            handleStopAndReplay();
+        switch (gMode) {
+            case PlayMode::Live: {
+                // 1st S: start recording
+                startRecording();
+                gMode = PlayMode::Recording;
+                std::cout << "[REPLAY] Mode: Live → Recording (Press S again to start replay)" << std::endl;
+            } break;
+
+            case PlayMode::Recording: {
+                // 2nd S: stop recording AND immediately start replay
+                stopRecording();
+                beginReplay();
+                gMode = PlayMode::Replaying;
+                std::cout << "[REPLAY] Mode: Recording → Replaying (Press S to return to live)" << std::endl;
+            } break;
+
+            case PlayMode::Replaying: {
+                // 3rd S: exit replay → back to live
+                endReplay();
+                gMode = PlayMode::Live;
+                std::cout << "[REPLAY] Mode: Replaying → Live (Press S to start new recording)" << std::endl;
+            } break;
         }
         s_pressed = true;
     } else if (!Engine::Input::keyPressed("stop_replay")) {
         s_pressed = false;
+    }
+
+    // (Optional) ESC to cancel replay early
+    if ((gMode == PlayMode::Replaying) && Engine::Input::keyPressed("pause")) {
+        endReplay();
+        gMode = PlayMode::Live;
+        std::cout << "[REPLAY] Replay cancelled by ESC - returning to live" << std::endl;
     }
 
     if (!gRemoteAvatarTx) {
@@ -1465,6 +1724,12 @@ physics_and_rendering:
 
     if (Engine::Input::keyPressed(SDL_SCANCODE_R)) resetPlayerPosition();
     if (Engine::Input::keyPressed(SDL_SCANCODE_ESCAPE)) Engine::stop();
+
+    // ===================== ONE-KEY S REPLAY INTEGRATION =====================
+    // After live simulation runs, record the frame if we're in Recording mode
+    if (gMode == PlayMode::Recording) {
+        recordFrame(dt);
+    }
 }
 
 
@@ -1561,16 +1826,12 @@ static int LaunchClient(int argc, char* argv[]) {
     initializeGameWorld();
     initializeEventHandlers();
 
-    // Initialize ReplayManager for session recording
-    gReplayManager = std::make_unique<Engine::ReplayManager>(&gEventManager, &gTimeline);
-    gEventManager.setReplayManager(gReplayManager.get());
-
-    // Start recording session with timestamp
-    auto now = std::chrono::system_clock::now();
-    auto timestamp = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
-    current_session_recording = "session_" + std::to_string(timestamp);
-    gReplayManager->startRecording(current_session_recording);
-    LOGI("Started recording session: %s", current_session_recording.c_str());
+    // ===================== ONE-KEY S REPLAY INITIALIZATION =====================
+    std::cout << "[REPLAY] One-Key Replay System Ready" << std::endl;
+    std::cout << "[REPLAY] Press 'S' to start recording" << std::endl;
+    std::cout << "[REPLAY] Press 'S' again to stop recording and start replay" << std::endl;
+    std::cout << "[REPLAY] Press 'S' during replay to return to live mode" << std::endl;
+    std::cout << "[REPLAY] Press ESC during replay to cancel replay" << std::endl;
 
     std::string host = std::getenv("SERVER_HOST") ? std::getenv("SERVER_HOST") : "127.0.0.1";
     if (!network_client.start(host.c_str(), "Player"))
