@@ -18,7 +18,7 @@ namespace Engine::Obj {
 
         ObjectId id() const noexcept { return id_; }
 
-        // ----- Components (runtime) -----
+
         template <typename T, typename... Args>
         T& add(Args&&... args) {
             static_assert(std::is_base_of_v<IComponent,T>, "T must be a component");
@@ -51,7 +51,7 @@ namespace Engine::Obj {
             return static_cast<const T*>(it->second.get());
         }
 
-        // ----- Property bag (lightweight, dynamic) -----
+
         void setProperty(const std::string& key, Property value) {
             props_[key] = std::move(value);
         }

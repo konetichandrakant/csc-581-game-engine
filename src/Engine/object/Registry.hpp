@@ -1,18 +1,21 @@
 #pragma once
-#include <unordered_map>
+#include <cstddef>
 #include <memory>
+#include <unordered_map>
 #include "Types.hpp"
 #include "GameObject.hpp"
+#include "Engine/memory/MemoryManager.hpp"
 
 namespace Engine::Obj {
 
     class Registry {
     public:
+        using GameObjectPtr = std::unique_ptr<GameObject, Memory::PoolDeleter<GameObject>>;
+
         GameObject& create() {
             ObjectId next = ++lastId_;
-            auto obj = std::make_unique<GameObject>(next);
-            auto* raw = obj.get();
-            objects_.emplace(next, std::move(obj));
+            GameObject* raw = Memory::MemoryManager::instance().create<GameObject>(next);
+            objects_.emplace(next, GameObjectPtr(raw));
             return *raw;
         }
 
@@ -35,11 +38,19 @@ namespace Engine::Obj {
             for (auto& kv : objects_) fn(*kv.second);
         }
 
+        void reserveGameObjects(std::size_t count) {
+            Memory::MemoryManager::instance().configurePool<GameObject>(count);
+        }
+
+        Memory::PoolStats gameObjectPoolStats() const {
+            return Memory::MemoryManager::instance().stats<GameObject>();
+        }
+
         std::size_t size() const noexcept { return objects_.size(); }
 
     private:
         ObjectId lastId_{0};
-        std::unordered_map<ObjectId, std::unique_ptr<GameObject>> objects_;
+        std::unordered_map<ObjectId, GameObjectPtr> objects_;
     };
 
 }

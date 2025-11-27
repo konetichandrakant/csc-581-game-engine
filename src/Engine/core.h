@@ -1,4 +1,4 @@
-// contains functions for initializing SDL window and running the game loop.
+
 
 #pragma once
 #include "entity.h"
@@ -95,4 +95,17 @@ namespace Engine {
       * meant for internal use. Called automatically when an entity is destroyed
       */
     bool unregisterEntity(Entity* entity);
+
+    /*
+     * Toggle simple status indicators rendered in the main loop.
+     */
+    void setRecordingIndicatorVisible(bool visible);
+    void setPlaybackIndicatorVisible(bool visible);
+
+    /*
+     * Optional overlay renderer callback invoked after entities draw, before presenting.
+     */
+    using OverlayRenderer = void (*)();
+    void setOverlayRenderer(OverlayRenderer renderer);
+
 }

@@ -6,7 +6,7 @@
 #include <unordered_map>
 #include <vector>
 #include <chrono>
-#include <zmq.h> // C API used via simple wrappers for minimal deps
+#include <zmq.h>
 #include "SharedData.hpp"
 
 namespace Engine { namespace Net {
@@ -14,10 +14,10 @@ namespace Engine { namespace Net {
 using Clock = std::chrono::steady_clock;
 
 struct ServerConfig {
-    // map client_id -> port
-    std::vector<std::pair<uint32_t,int>> clients; // e.g., {{1,6001},{2,6002},{3,6003}}
+
+    std::vector<std::pair<uint32_t,int>> clients;
     double world_hz = 60.0;
-    // Platform seed
+
     struct PlatformSeed { uint32_t id; float x, y, minX, maxX, speed; int dir; };
     std::vector<PlatformSeed> platforms;
 };
@@ -43,7 +43,7 @@ private:
         int dir;
     };
 
-    // world
+
     std::atomic<bool> running{false};
     std::thread worldThread;
     double worldHz;
@@ -54,7 +54,7 @@ private:
     std::vector<Platform> platforms;
     std::mutex worldMx;
 
-    // per-client threads
+
     struct ClientThread {
         uint32_t id;
         int port;
@@ -62,10 +62,10 @@ private:
     };
     std::vector<ClientThread> clientThreads;
 
-    // zmq context (one per server process)
+
     void* zmq_ctx{nullptr};
 
-    // internals
+
     void worldLoop();
     void clientRepLoop(uint32_t client_id, int port);
 
@@ -76,11 +76,11 @@ private:
 
 class Client {
 public:
-    // host e.g., "127.0.0.1", port e.g., 6001
+
     Client(const std::string& host, int port, uint32_t my_id);
     ~Client();
 
-    // Combined REQ/REP exchange (blocking); returns true if a reply was received.
+
     bool exchange(bool left, bool right, bool jump, float dt_client, StateMsg& out);
 
 private:
@@ -90,4 +90,4 @@ private:
     void* req{nullptr};
 };
 
-}} // namespace Engine::Net
+}}

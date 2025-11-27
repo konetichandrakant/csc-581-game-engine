@@ -1,7 +1,6 @@
-// src/Engine/object/NetworkSceneManager.cpp
+
 #include "NetworkSceneManager.hpp"
 #include <algorithm>
-#include <vector>
 
 namespace Engine::Obj {
     
@@ -11,7 +10,7 @@ namespace Engine::Obj {
         auto& player = registry_.create();
         auto playerId_obj = player.id();
         
-        // Add components
+
         auto& transform = player.add<Transform>();
         transform.x = x;
         transform.y = y;
@@ -44,7 +43,7 @@ namespace Engine::Obj {
         
         auto it = networkIdToObjectId_.find(playerId);
         if (it != networkIdToObjectId_.end()) {
-            // Update existing player
+
             auto* player = registry_.get(it->second);
             if (player) {
                 auto* network = player->get<NetworkPlayer>();
@@ -54,21 +53,21 @@ namespace Engine::Obj {
             }
             return it->second;
         } else {
-            // Create new remote player
+
             auto& player = registry_.create();
             auto playerId_obj = player.id();
             
-            // Add components
+
             auto& transform = player.add<Transform>();
             transform.x = x;
             transform.y = y;
             
             auto& sprite = player.add<Sprite>();
-            sprite.textureKey = "media/hurst.png"; // Default sprite for remote players
+            sprite.textureKey = "media/hurst.png";
             sprite.visible = true;
             
             auto& physics = player.add<PhysicsBody2D>();
-            physics.isKinematic = true; // Remote players are kinematic
+            physics.isKinematic = true;
             
             auto& network = player.add<NetworkPlayer>();
             network.playerId = playerId;

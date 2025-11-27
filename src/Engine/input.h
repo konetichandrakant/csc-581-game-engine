@@ -1,10 +1,15 @@
 #pragma once
 
+#include <initializer_list>
 #include <map>
 #include <string>
 #include <unordered_set>
+#include <vector>
 
 namespace Engine {
+
+    class EventManager;
+
     class Input {
         private:
         /*
@@ -17,9 +22,14 @@ namespace Engine {
 
         public:
 
+        struct ChordEventInfo {
+            std::string chordName;
+            float heldDuration;
+        };
+
         /*
          * determine whether the key is pressed based on SDL_Scancode value.
-         * see https://wiki.libsdl.org/SDL3/SDL_Scancode for a list of all scancodes.
+         * see https:
          *
          */
         static bool keyPressed(int sdlScancode);
@@ -36,7 +46,7 @@ namespace Engine {
          * for example, map("left", SDL_SCANCODE_A) would map the A key to an action called 'left'.
          *
          * Multiple scancodes can be mapped to the same action.
-         * see https://wiki.libsdl.org/SDL3/SDL_Scancode for a list of all scancodes.
+         * see https:
          */
         static void map(std::string actionName, int sdlScancode);
 
@@ -49,6 +59,37 @@ namespace Engine {
          * unmap all SDL_Scancodes from the action.
          */
         static void clear(std::string actionName);
+
+        /*
+         * Associate the input system with an EventManager for automatically raised chord events.
+         */
+        static void setEventManager(EventManager* manager);
+
+        /*
+         * Register a chord that becomes active when every listed action is pressed at the same time.
+         */
+        static void registerChord(const std::string& chordName,
+                                  const std::vector<std::string>& actions,
+                                  float minHoldTime = 0.0f);
+
+        static void registerChord(const std::string& chordName,
+                                  std::initializer_list<std::string> actions,
+                                  float minHoldTime = 0.0f);
+
+        /*
+         * Query whether a registered chord is currently active.
+         */
+        static bool chordActive(const std::string& chordName);
+
+        /*
+         * Poll and clear any chord events fired since the last update call.
+         */
+        static std::vector<ChordEventInfo> consumeChordEvents();
+
+        /*
+         * Update function that should be called once per frame to evaluate registered chords.
+         */
+        static void update(float dt);
     };
 
 }
