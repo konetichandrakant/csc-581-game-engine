@@ -4,9 +4,9 @@
 #include "Engine/input.h"
 #include "Engine/scaling.h"
 
+#include <SDL3/SDL.h>
 #include <SDL3/SDL_scancode.h>
 #include <SDL3/SDL_stdinc.h>
-#include <SDL3/SDL_keyboard.h>
 
 #include <algorithm>
 #include <cmath>
@@ -58,6 +58,8 @@ constexpr float kEnemyBulletSpeed = 380.0f;
 constexpr float kEnemyFireMin     = 1.2f;
 constexpr float kEnemyFireMax     = 2.5f;
 constexpr float kExplosionLife    = 0.35f;
+constexpr float kPromptAlpha      = 200.0f;
+constexpr int   kPromptPixelSize  = 6;
 
 struct GameState;
 
@@ -145,6 +147,9 @@ struct GameState {
     bool awaitingRestart{false};
     float enemyFireTimer{2.0f};
     float speedScale{1.0f};
+    bool promptActive{false};
+    bool promptShown{false};
+    bool promptExit{false};
 };
 
 static GameState* G = nullptr;
@@ -220,6 +225,8 @@ void configureInput() {
     Input::map("speed_half", SDL_SCANCODE_Z);
     Input::map("speed_one", SDL_SCANCODE_X);
     Input::map("speed_dbl", SDL_SCANCODE_C);
+    Input::map("confirm", SDL_SCANCODE_Y);
+    Input::map("exit", SDL_SCANCODE_ESCAPE);
 }
 
 void spawnInvaderGrid(GameState& state) {
@@ -258,6 +265,9 @@ void resetGame(GameState& state) {
     state.lives = kStartingLives;
     spawnInvaderGrid(state);
     resetPlayer(state);
+    state.promptActive = false;
+    state.promptShown = false;
+    state.promptExit = false;
 }
 
 void updateInvaders(GameState& state, float dt) {
@@ -350,7 +360,8 @@ void applyGameOver(GameState& state) {
         state.enemyBullets.clear();
     } else {
         state.awaitingRestart = true;
-        std::puts("[Space Invaders] Lives are over; restarting soon. Press any key to continue.");
+        state.promptActive = true;
+        std::puts("[Space Invaders] Lives are over; press 'Y' to play again or ESC to exit.");
     }
 }
 
@@ -360,6 +371,9 @@ void cleanup(GameState& state) {
     pruneDead(state.enemyBullets);
     pruneDead(state.explosions);
     if (state.invaders.empty() && !state.victory) state.victory = true;
+    if (state.victory) {
+        state.promptActive = true;
+    }
 }
 
 void announceOutcome(GameState& state) {
@@ -389,24 +403,37 @@ void applySpeedShortcuts(GameState& state) {
 void gameUpdate(float dt) {
     if (!G) return;
 
+    static bool pauseLatch = false;
+
+    if (G->promptActive) {
+        if (!G->promptShown) {
+            std::puts("[Space Invaders] Play new game? Press 'Y' to start again or ESC to quit.");
+            G->promptShown = true;
+        }
+        if (Engine::Input::keyPressed("confirm")) {
+            resetGame(*G);
+        } else if (Engine::Input::keyPressed("exit")) {
+            Engine::stop();
+        }
+        return;
+    }
+
     if (Engine::Input::keyPressed("restart")) {
         resetGame(*G);
     }
     applySpeedShortcuts(*G);
 
     if (Engine::Input::keyPressed("pause") && Engine::timeline) {
-        static bool toggled = false;
-        if (!toggled) {
+        if (!pauseLatch) {
             Engine::timeline->togglePause();
-            toggled = true;
+            pauseLatch = true;
         }
     } else {
-        static bool toggled = false;
-        toggled = false;
+        pauseLatch = false;
     }
 
     if (G->awaitingRestart) {
-        if (anyKeyPressed()) resetGame(*G);
+        // Should never reach here because promptActive covers it.
         return;
     }
 
@@ -441,10 +468,38 @@ void drawOverlay() {
     SDL_SetRenderDrawColor(Engine::renderer, 80, 200, 255, 255);
     SDL_RenderFillRect(Engine::renderer, &bar);
 
-    if (G->awaitingRestart) {
-        SDL_SetRenderDrawColor(Engine::renderer, 255, 255, 0, 180);
-        SDL_FRect msg{Engine::WINDOW_WIDTH * 0.25f, Engine::WINDOW_HEIGHT * 0.45f, Engine::WINDOW_WIDTH * 0.5f, 60.0f};
-        SDL_RenderFillRect(Engine::renderer, &msg);
+    if (G->awaitingRestart || G->promptActive) {
+        SDL_SetRenderDrawColor(Engine::renderer, 0, 0, 0, static_cast<Uint8>(kPromptAlpha));
+        SDL_FRect backdrop{Engine::WINDOW_WIDTH * 0.15f, Engine::WINDOW_HEIGHT * 0.4f,
+                           Engine::WINDOW_WIDTH * 0.7f, 120.0f};
+        SDL_RenderFillRect(Engine::renderer, &backdrop);
+        SDL_SetRenderDrawColor(Engine::renderer, 255, 255, 255, 255);
+        SDL_RenderRect(Engine::renderer, &backdrop);
+
+        // Simple pixel text renderer (white).
+        auto drawLines = [&](float x, float y, const std::vector<std::string>& lines) {
+            for (size_t r = 0; r < lines.size(); ++r) {
+                for (size_t c = 0; c < lines[r].size(); ++c) {
+                    if (lines[r][c] != ' ') {
+                        SDL_FRect px{ x + float(c * kPromptPixelSize),
+                                      y + float(r * kPromptPixelSize),
+                                      float(kPromptPixelSize), float(kPromptPixelSize) };
+                        SDL_RenderFillRect(Engine::renderer, &px);
+                    }
+                }
+            }
+        };
+
+        const std::vector<std::string> msg = {
+            "#######################   ###############################",
+            "# PRESS Y TO PLAY AGAIN #   # PRESS ESC TO QUIT GAME   #",
+            "#######################   ###############################"
+        };
+        float textW = float(msg[0].size() * kPromptPixelSize);
+        float textH = float(msg.size() * kPromptPixelSize);
+        float tx = Engine::WINDOW_WIDTH * 0.5f - textW * 0.5f;
+        float ty = Engine::WINDOW_HEIGHT * 0.45f - textH * 0.5f;
+        drawLines(tx, ty, msg);
     }
 
     SDL_SetRenderDrawColor(Engine::renderer, oldR, oldG, oldB, oldA);
