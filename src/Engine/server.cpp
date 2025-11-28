@@ -6,7 +6,8 @@
 #include <chrono>
 #include <cstring>
 #include <iostream>
-#include <arpa/inet.h>
+#include <winsock2.h>
+#include <vector>
 
 namespace {
 #pragma pack(push,1)

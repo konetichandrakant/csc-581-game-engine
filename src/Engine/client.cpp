@@ -6,7 +6,7 @@
 #include <thread>
 #include <iostream>
 #include <cctype>
-#include <arpa/inet.h>
+#include <winsock2.h>
 
 namespace {
 
