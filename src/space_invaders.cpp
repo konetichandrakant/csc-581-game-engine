@@ -3,6 +3,7 @@
 #include "Engine/collision.h"
 #include "Engine/input.h"
 #include "Engine/scaling.h"
+#include "Engine/memory/MemoryManager.hpp"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_scancode.h>
@@ -60,6 +61,8 @@ constexpr float kEnemyFireMax     = 2.5f;
 constexpr float kExplosionLife    = 0.35f;
 constexpr float kPromptAlpha      = 200.0f;
 constexpr int   kPromptPixelSize  = 6;
+constexpr float kDashBoostDur     = 1.0f;
+constexpr float kDashBoostMult    = 2.5f;
 
 struct GameState;
 
@@ -150,16 +153,28 @@ struct GameState {
     bool promptActive{false};
     bool promptShown{false};
     bool promptExit{false};
+    float dashBoostTimer{0.0f};
 };
 
 static GameState* G = nullptr;
 static std::mt19937 rng{12345u};
 
+template <typename T, typename... Args>
+T* Make(Args&&... args) {
+    return Engine::Memory::MemoryManager::instance().create<T>(std::forward<Args>(args)...);
+}
+
+template <typename T>
+void Destroy(T*& ptr) {
+    Engine::Memory::MemoryManager::instance().destroy(ptr);
+    ptr = nullptr;
+}
+
 template<typename T>
 void pruneDead(std::vector<T*>& list) {
     list.erase(std::remove_if(list.begin(), list.end(), [](T* ptr) {
         if (ptr && ptr->dead) {
-            delete ptr;
+            Destroy(ptr);
             return true;
         }
         return false;
@@ -192,9 +207,10 @@ void resetPlayer(GameState& state) {
 void Player::update(float dt) {
     if (!G || G->gameOver || G->victory || G->awaitingRestart) return;
 
+    const float speed = (G->dashBoostTimer > 0.0f) ? kPlayerSpeed * kDashBoostMult : kPlayerSpeed;
     float dx = 0.0f;
-    if (Engine::Input::keyPressed("left"))  dx -= kPlayerSpeed * dt;
-    if (Engine::Input::keyPressed("right")) dx += kPlayerSpeed * dt;
+    if (Engine::Input::keyPressed("left"))  dx -= speed * dt;
+    if (Engine::Input::keyPressed("right")) dx += speed * dt;
     translate(dx, 0.0f);
 
     const SDL_FRect visible = Engine::Scaling::getVisibleArea();
@@ -227,6 +243,8 @@ void configureInput() {
     Input::map("speed_dbl", SDL_SCANCODE_C);
     Input::map("confirm", SDL_SCANCODE_Y);
     Input::map("exit", SDL_SCANCODE_ESCAPE);
+    // Chord: both directions pressed => dash boost.
+    Input::registerChord("dash_boost", {"left", "right"});
 }
 
 void spawnInvaderGrid(GameState& state) {
@@ -240,17 +258,17 @@ void spawnInvaderGrid(GameState& state) {
         for (int c = 0; c < kCols; ++c) {
             const float x = startX + spacingX * c;
             const float y = startY  + spacingY * r;
-            auto* inv = new Invader(x, y, (r + c) % 2 == 0);
+            auto* inv = Make<Invader>(x, y, (r + c) % 2 == 0);
             state.invaders.push_back(inv);
         }
     }
 }
 
 void resetGame(GameState& state) {
-    for (auto* i : state.invaders) delete i;
-    for (auto* b : state.bullets) delete b;
-    for (auto* eb : state.enemyBullets) delete eb;
-    for (auto* ex : state.explosions) delete ex;
+    for (auto* i : state.invaders) Destroy(i);
+    for (auto* b : state.bullets) Destroy(b);
+    for (auto* eb : state.enemyBullets) Destroy(eb);
+    for (auto* ex : state.explosions) Destroy(ex);
     state.invaders.clear();
     state.bullets.clear();
     state.enemyBullets.clear();
@@ -263,6 +281,7 @@ void resetGame(GameState& state) {
     state.awaitingRestart = false;
     state.enemyFireTimer = randRange(kEnemyFireMin, kEnemyFireMax);
     state.lives = kStartingLives;
+    state.dashBoostTimer = 0.0f;
     spawnInvaderGrid(state);
     resetPlayer(state);
     state.promptActive = false;
@@ -304,7 +323,7 @@ void spawnEnemyBullet(GameState& state) {
     if (!inv || inv->dead) return;
     float x = inv->getPosX() + inv->getWidth() * 0.5f;
     float y = inv->getPosY() + inv->getHeight();
-    auto* eb = new EnemyBullet(x, y);
+    auto* eb = Make<EnemyBullet>(x, y);
     state.enemyBullets.push_back(eb);
 }
 
@@ -317,7 +336,7 @@ void handleCollisions(GameState& state) {
             if (Engine::Collision::check(b, inv)) {
                 b->dead = true;
                 inv->dead = true;
-                state.explosions.push_back(new Explosion(inv->getPosX(), inv->getPosY()));
+                state.explosions.push_back(Make<Explosion>(inv->getPosX(), inv->getPosY()));
                 break;
             }
         }
@@ -329,7 +348,7 @@ void handleCollisions(GameState& state) {
             if (eb->dead) continue;
             if (Engine::Collision::check(eb, state.player)) {
                 eb->dead = true;
-                state.explosions.push_back(new Explosion(state.player->getPosX(), state.player->getPosY()));
+                state.explosions.push_back(Make<Explosion>(state.player->getPosX(), state.player->getPosY()));
                 state.gameOver = true;
                 break;
             }
@@ -342,7 +361,7 @@ void handleCollisions(GameState& state) {
             if (inv->dead) continue;
             if (Engine::Collision::check(inv, state.player) ||
                 inv->getPosY() + inv->getHeight() >= state.player->getPosY()) {
-                state.explosions.push_back(new Explosion(state.player->getPosX(), state.player->getPosY()));
+                state.explosions.push_back(Make<Explosion>(state.player->getPosX(), state.player->getPosY()));
                 state.gameOver = true;
                 break;
             }
@@ -356,7 +375,7 @@ void applyGameOver(GameState& state) {
     if (state.lives > 0) {
         state.gameOver = false;
         resetPlayer(state);
-        for (auto* eb : state.enemyBullets) delete eb;
+        for (auto* eb : state.enemyBullets) Destroy(eb);
         state.enemyBullets.clear();
     } else {
         state.awaitingRestart = true;
@@ -404,6 +423,16 @@ void gameUpdate(float dt) {
     if (!G) return;
 
     static bool pauseLatch = false;
+
+    // Chord events: dash boost
+    for (auto evt : Engine::Input::consumeChordEvents()) {
+        if (evt.chordName == "dash_boost") {
+            G->dashBoostTimer = kDashBoostDur;
+        }
+    }
+    if (G->dashBoostTimer > 0.0f) {
+        G->dashBoostTimer = std::max(0.0f, G->dashBoostTimer - dt);
+    }
 
     if (G->promptActive) {
         if (!G->promptShown) {
@@ -522,8 +551,15 @@ void buildScene() {
     rng.seed(SDL_GetTicks());
     G = &state;
 
+    // Configure pools for game objects.
+    Engine::Memory::MemoryManager::instance().configurePool<Invader>(kRows * kCols + 4);
+    Engine::Memory::MemoryManager::instance().configurePool<Bullet>(64);
+    Engine::Memory::MemoryManager::instance().configurePool<EnemyBullet>(64);
+    Engine::Memory::MemoryManager::instance().configurePool<Explosion>(64);
+    Engine::Memory::MemoryManager::instance().configurePool<Player>(1);
+
     configureInput();
-    state.player = new Player(state);
+    state.player = Make<Player>(state);
     resetGame(state);
 }
 
