@@ -66,7 +66,7 @@ struct GameState;
 
 class Explosion : public Engine::Entity {
 public:
-    Explosion(float x, float y) : Engine::Entity(ResolveAsset("media/explosion_8f.png").c_str()) {
+    Explosion(float x, float y) : Engine::Entity(ResolveAsset("media/explosion.png").c_str()) {
         setPhysics(false);
         setCollisions(false);
         setPos(x, y);
