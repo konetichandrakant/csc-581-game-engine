@@ -1,4 +1,3 @@
-// Single-player Space Invaders style game (no multiplayer).
 #include "Engine/engine.h"
 #include "Engine/collision.h"
 #include "Engine/input.h"
@@ -38,10 +37,9 @@ std::string ResolveAsset(const std::string& relative) {
         fs::path p = base / relative;
         if (fs::exists(p)) return p.string();
     }
-    return relative; // fallback
+    return relative;
 }
 
-// Tunables
 constexpr float kPlayerSpeed      = 520.0f;
 constexpr float kBulletSpeed      = -900.0f;
 constexpr float kFireCooldown     = 0.28f;
@@ -243,7 +241,6 @@ void configureInput() {
     Input::map("speed_dbl", SDL_SCANCODE_C);
     Input::map("confirm", SDL_SCANCODE_Y);
     Input::map("exit", SDL_SCANCODE_ESCAPE);
-    // Chord: both directions pressed => dash boost.
     Input::registerChord("dash_boost", {"left", "right"});
 }
 
@@ -328,7 +325,6 @@ void spawnEnemyBullet(GameState& state) {
 }
 
 void handleCollisions(GameState& state) {
-    // player bullets vs invaders
     for (auto* b : state.bullets) {
         if (b->dead) continue;
         for (auto* inv : state.invaders) {
@@ -342,7 +338,6 @@ void handleCollisions(GameState& state) {
         }
     }
 
-    // enemy bullets vs player
     if (state.player && !state.awaitingRestart) {
         for (auto* eb : state.enemyBullets) {
             if (eb->dead) continue;
@@ -355,7 +350,6 @@ void handleCollisions(GameState& state) {
         }
     }
 
-    // invaders reaching player line
     if (state.player && !state.awaitingRestart) {
         for (auto* inv : state.invaders) {
             if (inv->dead) continue;
@@ -424,7 +418,6 @@ void gameUpdate(float dt) {
 
     static bool pauseLatch = false;
 
-    // Chord events: dash boost
     for (auto evt : Engine::Input::consumeChordEvents()) {
         if (evt.chordName == "dash_boost") {
             G->dashBoostTimer = kDashBoostDur;
@@ -462,7 +455,6 @@ void gameUpdate(float dt) {
     }
 
     if (G->awaitingRestart) {
-        // Should never reach here because promptActive covers it.
         return;
     }
 
@@ -484,14 +476,12 @@ void drawOverlay() {
     Uint8 oldR, oldG, oldB, oldA;
     SDL_GetRenderDrawColor(Engine::renderer, &oldR, &oldG, &oldB, &oldA);
 
-    // Lives indicators (top-left)
     for (int i = 0; i < G->lives; ++i) {
         SDL_FRect rect{12.0f + i * 22.0f, 12.0f, 18.0f, 18.0f};
         SDL_SetRenderDrawColor(Engine::renderer, 220, 60, 60, 255);
         SDL_RenderFillRect(Engine::renderer, &rect);
     }
 
-    // Speed indicator (simple bar)
     float speedVal = G->speedScale;
     SDL_FRect bar{12.0f, 40.0f, 80.0f * speedVal, 8.0f};
     SDL_SetRenderDrawColor(Engine::renderer, 80, 200, 255, 255);
@@ -505,7 +495,6 @@ void drawOverlay() {
         SDL_SetRenderDrawColor(Engine::renderer, 255, 255, 255, 255);
         SDL_RenderRect(Engine::renderer, &backdrop);
 
-        // Simple pixel text renderer (white).
         auto drawLines = [&](float x, float y, const std::vector<std::string>& lines) {
             for (size_t r = 0; r < lines.size(); ++r) {
                 for (size_t c = 0; c < lines[r].size(); ++c) {
@@ -551,7 +540,6 @@ void buildScene() {
     rng.seed(SDL_GetTicks());
     G = &state;
 
-    // Configure pools for game objects.
     Engine::Memory::MemoryManager::instance().configurePool<Invader>(kRows * kCols + 4);
     Engine::Memory::MemoryManager::instance().configurePool<Bullet>(64);
     Engine::Memory::MemoryManager::instance().configurePool<EnemyBullet>(64);
@@ -563,7 +551,7 @@ void buildScene() {
     resetGame(state);
 }
 
-} // namespace
+}
 
 int RunSpaceInvaders() {
     if (!Engine::init("Space Invaders")) {
