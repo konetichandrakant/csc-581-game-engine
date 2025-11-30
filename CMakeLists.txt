@@ -19,23 +19,35 @@ add_subdirectory(src/Engine)
 
 # ── Executables
 add_executable(space_invaders  src/space_invaders.cpp)
+add_executable(snake_game     src/snake_game.cpp)
 
 # Friend-style performance test (single target only)
 add_executable(PerformanceTest src/performance_test.cpp)
 
 # ── Includes
 target_include_directories(space_invaders PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/third_party)
+target_include_directories(snake_game PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/third_party)
 target_include_directories(PerformanceTest PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/third_party)
 
 # ---- Client: console app; DO NOT link SDL3::SDL3main ----
 set_target_properties(space_invaders PROPERTIES WIN32_EXECUTABLE OFF)
 target_compile_definitions(space_invaders PRIVATE SDL_MAIN_HANDLED)
+set_target_properties(snake_game PROPERTIES WIN32_EXECUTABLE OFF)
+target_compile_definitions(snake_game PRIVATE SDL_MAIN_HANDLED)
 
 target_link_libraries(space_invaders
         PRIVATE
         Engine
         SDL3::SDL3              # OK
         SDL3_image::SDL3_image  # OK
+        cppzmq
+        libzmq
+)
+target_link_libraries(snake_game
+        PRIVATE
+        Engine
+        SDL3::SDL3
+        SDL3_image::SDL3_image
         cppzmq
         libzmq
 )
@@ -62,5 +74,5 @@ endif()
 
 # Convenience aggregate build
 add_custom_target(build_both ALL
-        DEPENDS space_invaders PerformanceTest
+        DEPENDS space_invaders snake_game PerformanceTest
 )

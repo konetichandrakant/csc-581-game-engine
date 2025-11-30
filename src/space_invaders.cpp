@@ -18,8 +18,6 @@
 #include <string>
 #include <vector>
 
-namespace {
-
 std::string ResolveAsset(const std::string& relative) {
     namespace fs = std::filesystem;
     static std::vector<fs::path> searchPaths;
@@ -549,8 +547,6 @@ void buildScene() {
     configureInput();
     state.player = Make<Player>(state);
     resetGame(state);
-}
-
 }
 
 int RunSpaceInvaders() {
