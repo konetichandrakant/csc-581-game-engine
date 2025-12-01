@@ -4,6 +4,7 @@
 #include "Engine/memory/MemoryManager.hpp"
 
 #include <SDL3/SDL.h>
+#include <SDL3_ttf/SDL_ttf.h>
 #include <SDL3/SDL_scancode.h>
 
 #include <algorithm>
@@ -11,6 +12,7 @@
 #include <cstdio>
 #include <random>
 #include <vector>
+#include <filesystem>
 
 constexpr int   GridCols          = 26;
 constexpr int   GridRows          = 18;
@@ -20,6 +22,30 @@ constexpr float MinStepInterval   = 0.14f;
 constexpr float GridBorder        = 8.0f;
 constexpr float PromptAlpha       = 200.0f;
 constexpr int   PromptPixelSize   = 6;
+
+static TTF_Font* gFont = nullptr;
+
+std::string ResolveAsset(const std::string& relative) {
+    namespace fs = std::filesystem;
+    static std::vector<fs::path> searchPaths;
+    if (searchPaths.empty()) {
+        searchPaths.push_back(fs::current_path());
+        searchPaths.push_back(fs::current_path().parent_path());
+        searchPaths.push_back(fs::current_path().parent_path().parent_path());
+        if (auto* base = SDL_GetBasePath()) {
+            fs::path exe(base);
+            SDL_free(const_cast<char*>(base));
+            searchPaths.push_back(exe);
+            searchPaths.push_back(exe.parent_path());
+            searchPaths.push_back(exe.parent_path().parent_path());
+        }
+    }
+    for (const auto& base : searchPaths) {
+        fs::path p = base / relative;
+        if (fs::exists(p)) return p.string();
+    }
+    return relative;
+}
 
 struct Segment {
     int x;
@@ -198,6 +224,39 @@ void configureInput() {
     Input::map("confirm", SDL_SCANCODE_Y);
 }
 
+TTF_Font* LoadFont() {
+    if (gFont) return gFont;
+    if (TTF_WasInit() == 0) {
+        if (TTF_Init() == -1) {
+            std::fprintf(stderr, "[Snake] TTF_Init failed: %s\n", SDL_GetError());
+            return nullptr;
+        }
+    }
+    std::string path = ResolveAsset("media/DejaVuSans.ttf");
+    gFont = TTF_OpenFont(path.c_str(), 20);
+    if (!gFont) std::fprintf(stderr, "[Snake] Could not load font %s : %s\n", path.c_str(), SDL_GetError());
+    return gFont;
+}
+
+void DrawText(const std::string& text, float x, float y) {
+    if (!Engine::renderer) return;
+    TTF_Font* font = LoadFont();
+    if (!font) return;
+    SDL_Color white{255, 255, 255, 255};
+    int w = 0, h = 0;
+    if (!TTF_GetStringSize(font, text.c_str(), text.size(), &w, &h)) {
+        return;
+    }
+    SDL_Surface* surf = TTF_RenderText_Blended(font, text.c_str(), text.size(), white);
+    if (!surf) return;
+    SDL_Texture* tex = SDL_CreateTextureFromSurface(Engine::renderer, surf);
+    SDL_DestroySurface(surf);
+    if (!tex) return;
+    SDL_FRect dst{ x, y, static_cast<float>(w), static_cast<float>(h) };
+    SDL_RenderTexture(Engine::renderer, tex, nullptr, &dst);
+    SDL_DestroyTexture(tex);
+}
+
 void handleInput(GameState& st) {
     static bool leftHeld = false;
     static bool rightHeld = false;
@@ -363,29 +422,18 @@ void drawOverlay() {
         SDL_SetRenderDrawColor(Engine::renderer, 255, 255, 255, 255);
         SDL_RenderRect(Engine::renderer, &backdrop);
 
-        auto drawLines = [&](float x, float y, const std::vector<std::string>& lines) {
-            for (size_t r = 0; r < lines.size(); ++r) {
-                for (size_t c = 0; c < lines[r].size(); ++c) {
-                    if (lines[r][c] != ' ') {
-                        SDL_FRect px{ x + float(c * PromptPixelSize),
-                                      y + float(r * PromptPixelSize),
-                                      float(PromptPixelSize), float(PromptPixelSize) };
-                        SDL_RenderFillRect(Engine::renderer, &px);
-                    }
-                }
-            }
-        };
-
-        const std::vector<std::string> msg = {
-            "#######################   ###############################",
-            "# PRESS Y TO PLAY AGAIN #   # PRESS ESC TO QUIT GAME   #",
-            "#######################   ###############################"
-        };
-        float textW = float(msg[0].size() * PromptPixelSize);
-        float textH = float(msg.size() * PromptPixelSize);
+        const std::string line1 = "Press Y to play again";
+        const std::string line2 = "Press ESC to quit game";
+        int w1 = 0, h1 = 0, w2 = 0, h2 = 0;
+        if (TTF_Font* font = LoadFont()) {
+            TTF_GetStringSize(font, line1.c_str(), line1.size(), &w1, &h1);
+            TTF_GetStringSize(font, line2.c_str(), line2.size(), &w2, &h2);
+        }
+        float textW = static_cast<float>(std::max(w1, w2));
         float tx = Engine::WINDOW_WIDTH * 0.5f - textW * 0.5f;
-        float ty = Engine::WINDOW_HEIGHT * 0.45f - textH * 0.5f;
-        drawLines(tx, ty, msg);
+        float ty = Engine::WINDOW_HEIGHT * 0.42f;
+        DrawText(line1, tx, ty);
+        DrawText(line2, tx, ty + static_cast<float>(h1 + 8));
     }
 }
 
