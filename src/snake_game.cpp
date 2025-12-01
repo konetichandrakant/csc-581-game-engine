@@ -12,14 +12,14 @@
 #include <random>
 #include <vector>
 
-constexpr int   kGridCols          = 26;
-constexpr int   kGridRows          = 18;
-constexpr float kCellSize          = 32.0f;
-constexpr float kBaseStepInterval  = 0.45f;
-constexpr float kMinStepInterval   = 0.14f;
-constexpr float kGridBorder        = 8.0f;
-constexpr float kPromptAlpha       = 200.0f;
-constexpr int   kPromptPixelSize   = 6;
+constexpr int   GridCols          = 26;
+constexpr int   GridRows          = 18;
+constexpr float CellSize          = 32.0f;
+constexpr float BaseStepInterval  = 0.45f;
+constexpr float MinStepInterval   = 0.14f;
+constexpr float GridBorder        = 8.0f;
+constexpr float PromptAlpha       = 200.0f;
+constexpr int   PromptPixelSize   = 6;
 
 struct Segment {
     int x;
@@ -76,8 +76,8 @@ bool occupiesCell(const GameState& st, int cx, int cy) {
 }
 
 SDL_Point randomEmptyCell(const GameState& st) {
-    std::uniform_int_distribution<int> dx(0, kGridCols - 1);
-    std::uniform_int_distribution<int> dy(0, kGridRows - 1);
+    std::uniform_int_distribution<int> dx(0, GridCols - 1);
+    std::uniform_int_distribution<int> dy(0, GridRows - 1);
     for (int attempts = 0; attempts < 512; ++attempts) {
         int x = dx(rng);
         int y = dy(rng);
@@ -138,8 +138,8 @@ Direction turnRight(Direction dir) {
 
 float stepInterval(const GameState& st) {
     float shrink = std::min(0.07f, 0.0015f * std::max(0, static_cast<int>(st.snake.size()) - 4));
-    float interval = kBaseStepInterval - shrink;
-    return std::max(interval, kMinStepInterval);
+    float interval = BaseStepInterval - shrink;
+    return std::max(interval, MinStepInterval);
 }
 
 bool advance(GameState& st) {
@@ -154,7 +154,7 @@ bool advance(GameState& st) {
         case Direction::Right: ++next.x; break;
     }
 
-    if (next.x < 0 || next.y < 0 || next.x >= kGridCols || next.y >= kGridRows) {
+    if (next.x < 0 || next.y < 0 || next.x >= GridCols || next.y >= GridRows) {
         st.gameOver = true;
         st.printedOutcome = false;
         return false;
@@ -285,7 +285,7 @@ void gameUpdate(float dt) {
 }
 
 SDL_FRect cellRect(float cx, float cy, float originX, float originY) {
-    return {originX + cx * kCellSize, originY + cy * kCellSize, kCellSize, kCellSize};
+    return {originX + cx * CellSize, originY + cy * CellSize, CellSize, CellSize};
 }
 
 void drawFilledCircle(const SDL_FPoint& center, float radius, SDL_Color color) {
@@ -306,25 +306,25 @@ void drawOverlay() {
     if (!Engine::renderer || !G) return;
 
     SDL_FRect visible = Engine::Scaling::getVisibleArea();
-    const float gridW = kGridCols * kCellSize;
-    const float gridH = kGridRows * kCellSize;
+    const float gridW = GridCols * CellSize;
+    const float gridH = GridRows * CellSize;
     const float originX = visible.x + (visible.w - gridW) * 0.5f;
     const float originY = visible.y + (visible.h - gridH) * 0.5f;
 
-    SDL_FRect gridArea{originX - kGridBorder, originY - kGridBorder,
-                       gridW + kGridBorder * 2.0f, gridH + kGridBorder * 2.0f};
+    SDL_FRect gridArea{originX - GridBorder, originY - GridBorder,
+                       gridW + GridBorder * 2.0f, gridH + GridBorder * 2.0f};
     SDL_FRect scaledGrid = Engine::Scaling::apply(gridArea);
     SDL_SetRenderDrawColor(Engine::renderer, 12, 16, 26, 255);
     SDL_RenderFillRect(Engine::renderer, &scaledGrid);
 
-    for (int c = 0; c <= kGridCols; ++c) {
-        SDL_FRect line{originX + c * kCellSize, originY, 1.0f, gridH};
+    for (int c = 0; c <= GridCols; ++c) {
+        SDL_FRect line{originX + c * CellSize, originY, 1.0f, gridH};
         SDL_FRect scaled = Engine::Scaling::apply(line);
         SDL_SetRenderDrawColor(Engine::renderer, 32, 46, 68, 255);
         SDL_RenderFillRect(Engine::renderer, &scaled);
     }
-    for (int r = 0; r <= kGridRows; ++r) {
-        SDL_FRect line{originX, originY + r * kCellSize, gridW, 1.0f};
+    for (int r = 0; r <= GridRows; ++r) {
+        SDL_FRect line{originX, originY + r * CellSize, gridW, 1.0f};
         SDL_FRect scaled = Engine::Scaling::apply(line);
         SDL_SetRenderDrawColor(Engine::renderer, 32, 46, 68, 255);
         SDL_RenderFillRect(Engine::renderer, &scaled);
@@ -345,9 +345,9 @@ void drawOverlay() {
     }
 
     if (G->foodActive) {
-        SDL_FPoint center{originX + (G->food.x + 0.5f) * kCellSize,
-                          originY + (G->food.y + 0.5f) * kCellSize};
-        drawFilledCircle(center, kCellSize * 0.35f, SDL_Color{220, 60, 60, 255});
+        SDL_FPoint center{originX + (G->food.x + 0.5f) * CellSize,
+                          originY + (G->food.y + 0.5f) * CellSize};
+        drawFilledCircle(center, CellSize * 0.35f, SDL_Color{220, 60, 60, 255});
     }
 
     SDL_FRect hud{originX, originY - 28.0f, gridW, 20.0f};
@@ -356,7 +356,7 @@ void drawOverlay() {
     SDL_RenderFillRect(Engine::renderer, &hudScaled);
 
     if (G->promptActive) {
-        SDL_SetRenderDrawColor(Engine::renderer, 0, 0, 0, static_cast<Uint8>(kPromptAlpha));
+        SDL_SetRenderDrawColor(Engine::renderer, 0, 0, 0, static_cast<Uint8>(PromptAlpha));
         SDL_FRect backdrop{Engine::WINDOW_WIDTH * 0.15f, Engine::WINDOW_HEIGHT * 0.4f,
                            Engine::WINDOW_WIDTH * 0.7f, 120.0f};
         SDL_RenderFillRect(Engine::renderer, &backdrop);
@@ -367,9 +367,9 @@ void drawOverlay() {
             for (size_t r = 0; r < lines.size(); ++r) {
                 for (size_t c = 0; c < lines[r].size(); ++c) {
                     if (lines[r][c] != ' ') {
-                        SDL_FRect px{ x + float(c * kPromptPixelSize),
-                                      y + float(r * kPromptPixelSize),
-                                      float(kPromptPixelSize), float(kPromptPixelSize) };
+                        SDL_FRect px{ x + float(c * PromptPixelSize),
+                                      y + float(r * PromptPixelSize),
+                                      float(PromptPixelSize), float(PromptPixelSize) };
                         SDL_RenderFillRect(Engine::renderer, &px);
                     }
                 }
@@ -381,8 +381,8 @@ void drawOverlay() {
             "# PRESS Y TO PLAY AGAIN #   # PRESS ESC TO QUIT GAME   #",
             "#######################   ###############################"
         };
-        float textW = float(msg[0].size() * kPromptPixelSize);
-        float textH = float(msg.size() * kPromptPixelSize);
+        float textW = float(msg[0].size() * PromptPixelSize);
+        float textH = float(msg.size() * PromptPixelSize);
         float tx = Engine::WINDOW_WIDTH * 0.5f - textW * 0.5f;
         float ty = Engine::WINDOW_HEIGHT * 0.45f - textH * 0.5f;
         drawLines(tx, ty, msg);
@@ -399,7 +399,7 @@ void buildScene() {
     rng.seed(SDL_GetTicks());
     G = &state;
 
-    Engine::Memory::MemoryManager::instance().configurePool<Segment>(kGridCols * kGridRows + 8);
+    Engine::Memory::MemoryManager::instance().configurePool<Segment>(GridCols * GridRows + 8);
 
     configureInput();
     resetSnake(state);

@@ -38,27 +38,27 @@ std::string ResolveAsset(const std::string& relative) {
     return relative;
 }
 
-constexpr float kPlayerSpeed      = 520.0f;
-constexpr float kBulletSpeed      = -900.0f;
-constexpr float kFireCooldown     = 0.28f;
-constexpr float kInvaderBaseSpd   = 70.0f;
-constexpr float kInvaderAccel     = 4.0f;
-constexpr float kInvaderDrop      = 32.0f;
-constexpr float kLeftMargin       = 32.0f;
-constexpr float kRightMargin      = 32.0f;
-constexpr float kTopMargin        = 96.0f;
-constexpr float kPlayerYOffset    = 140.0f;
-constexpr int   kRows             = 4;
-constexpr int   kCols             = 10;
-constexpr int   kStartingLives    = 3;
-constexpr float kEnemyBulletSpeed = 380.0f;
-constexpr float kEnemyFireMin     = 1.2f;
-constexpr float kEnemyFireMax     = 2.5f;
-constexpr float kExplosionLife    = 0.35f;
-constexpr float kPromptAlpha      = 200.0f;
-constexpr int   kPromptPixelSize  = 6;
-constexpr float kDashBoostDur     = 1.0f;
-constexpr float kDashBoostMult    = 2.5f;
+constexpr float PlayerSpeed      = 520.0f;
+constexpr float BulletSpeed      = -900.0f;
+constexpr float FireCooldown     = 0.28f;
+constexpr float InvaderBaseSpd   = 70.0f;
+constexpr float InvaderAccel     = 4.0f;
+constexpr float InvaderDrop      = 32.0f;
+constexpr float LeftMargin       = 32.0f;
+constexpr float RightMargin      = 32.0f;
+constexpr float TopMargin        = 96.0f;
+constexpr float PlayerYOffset    = 140.0f;
+constexpr int   Rows             = 4;
+constexpr int   Cols             = 10;
+constexpr int   StartingLives    = 3;
+constexpr float EnemyBulletSpeed = 380.0f;
+constexpr float EnemyFireMin     = 1.2f;
+constexpr float EnemyFireMax     = 2.5f;
+constexpr float ExplosionLife    = 0.35f;
+constexpr float PromptAlpha      = 200.0f;
+constexpr int   PromptPixelSize  = 6;
+constexpr float DashBoostDur     = 1.0f;
+constexpr float DashBoostMult    = 2.5f;
 
 struct GameState;
 
@@ -74,7 +74,7 @@ public:
         life -= dt;
         if (life <= 0.0f) dead = true;
     }
-    float life{kExplosionLife};
+    float life{ExplosionLife};
     bool dead{false};
 };
 
@@ -86,7 +86,7 @@ public:
         setType("Bullet");
     }
     void update(float dt) override {
-        translate(0.0f, kBulletSpeed * dt);
+        translate(0.0f, BulletSpeed * dt);
         if (getPosY() + getHeight() < -64.0f) dead = true;
     }
     bool dead{false};
@@ -100,7 +100,7 @@ public:
         setType("EnemyBullet");
     }
     void update(float dt) override {
-        translate(0.0f, kEnemyBulletSpeed * dt);
+        translate(0.0f, EnemyBulletSpeed * dt);
         if (getPosY() > Engine::WINDOW_HEIGHT + 80.0f) dead = true;
     }
     bool dead{false};
@@ -142,7 +142,7 @@ struct GameState {
     bool printedOutcome{false};
     int totalInvaders{0};
 
-    int lives{kStartingLives};
+    int lives{StartingLives};
     bool awaitingRestart{false};
     float enemyFireTimer{2.0f};
     float speedScale{1.0f};
@@ -195,7 +195,7 @@ bool anyKeyPressed() {
 void resetPlayer(GameState& state) {
     if (!state.player) return;
     state.player->setPos(Engine::WINDOW_WIDTH * 0.5f - state.player->getWidth() * 0.5f,
-                         Engine::WINDOW_HEIGHT - kPlayerYOffset);
+                         Engine::WINDOW_HEIGHT - PlayerYOffset);
     state.player->setVelocity(0, 0);
     state.gameOver = false;
 }
@@ -203,15 +203,15 @@ void resetPlayer(GameState& state) {
 void Player::update(float dt) {
     if (!G || G->gameOver || G->victory || G->awaitingRestart) return;
 
-    const float speed = (G->dashBoostTimer > 0.0f) ? kPlayerSpeed * kDashBoostMult : kPlayerSpeed;
+    const float speed = (G->dashBoostTimer > 0.0f) ? PlayerSpeed * DashBoostMult : PlayerSpeed;
     float dx = 0.0f;
     if (Engine::Input::keyPressed("left"))  dx -= speed * dt;
     if (Engine::Input::keyPressed("right")) dx += speed * dt;
     translate(dx, 0.0f);
 
     const SDL_FRect visible = Engine::Scaling::getVisibleArea();
-    const float minX = visible.x + kLeftMargin;
-    const float maxX = visible.x + visible.w - kRightMargin - getWidth();
+    const float minX = visible.x + LeftMargin;
+    const float maxX = visible.x + visible.w - RightMargin - getWidth();
     const float clampedX = std::clamp(getPosX(), minX, maxX);
     setPosX(clampedX);
 
@@ -221,7 +221,7 @@ void Player::update(float dt) {
         const float by = getPosY() - 20.0f;
         auto* b = new Bullet(bx, by);
         G->bullets.push_back(b);
-        cooldown = kFireCooldown;
+        cooldown = FireCooldown;
     }
 }
 
@@ -245,12 +245,12 @@ void configureInput() {
 void spawnInvaderGrid(GameState& state) {
     const float spacingX = 96.0f;
     const float spacingY = 72.0f;
-    const float startX   = kLeftMargin + 24.0f;
-    const float startY   = kTopMargin;
+    const float startX   = LeftMargin + 24.0f;
+    const float startY   = TopMargin;
 
-    state.totalInvaders = kRows * kCols;
-    for (int r = 0; r < kRows; ++r) {
-        for (int c = 0; c < kCols; ++c) {
+    state.totalInvaders = Rows * Cols;
+    for (int r = 0; r < Rows; ++r) {
+        for (int c = 0; c < Cols; ++c) {
             const float x = startX + spacingX * c;
             const float y = startY  + spacingY * r;
             auto* inv = Make<Invader>(x, y, (r + c) % 2 == 0);
@@ -274,8 +274,8 @@ void resetGame(GameState& state) {
     state.gameOver = false;
     state.printedOutcome = false;
     state.awaitingRestart = false;
-    state.enemyFireTimer = randRange(kEnemyFireMin, kEnemyFireMax);
-    state.lives = kStartingLives;
+    state.enemyFireTimer = randRange(EnemyFireMin, EnemyFireMax);
+    state.lives = StartingLives;
     state.dashBoostTimer = 0.0f;
     spawnInvaderGrid(state);
     resetPlayer(state);
@@ -287,7 +287,7 @@ void resetGame(GameState& state) {
 void updateInvaders(GameState& state, float dt) {
     if (state.invaders.empty()) return;
 
-    const float speed = kInvaderBaseSpd + (state.totalInvaders - static_cast<int>(state.invaders.size())) * kInvaderAccel;
+    const float speed = InvaderBaseSpd + (state.totalInvaders - static_cast<int>(state.invaders.size())) * InvaderAccel;
     const float dir = state.movingRight ? 1.0f : -1.0f;
     const float dx  = dir * speed * dt;
 
@@ -301,12 +301,12 @@ void updateInvaders(GameState& state, float dt) {
     }
 
     const SDL_FRect visible = Engine::Scaling::getVisibleArea();
-    const float leftBound  = visible.x + kLeftMargin;
-    const float rightBound = visible.x + visible.w - kRightMargin;
+    const float leftBound  = visible.x + LeftMargin;
+    const float rightBound = visible.x + visible.w - RightMargin;
 
     if (minX <= leftBound || maxX >= rightBound) {
         state.movingRight = !state.movingRight;
-        for (auto* inv : state.invaders) inv->translate(0.0f, kInvaderDrop);
+        for (auto* inv : state.invaders) inv->translate(0.0f, InvaderDrop);
     }
 }
 
@@ -418,7 +418,7 @@ void gameUpdate(float dt) {
 
     for (auto evt : Engine::Input::consumeChordEvents()) {
         if (evt.chordName == "dash_boost") {
-            G->dashBoostTimer = kDashBoostDur;
+            G->dashBoostTimer = DashBoostDur;
         }
     }
     if (G->dashBoostTimer > 0.0f) {
@@ -465,7 +465,7 @@ void gameUpdate(float dt) {
     G->enemyFireTimer -= dt;
     if (G->enemyFireTimer <= 0.0f) {
         spawnEnemyBullet(*G);
-        G->enemyFireTimer = randRange(kEnemyFireMin, kEnemyFireMax);
+        G->enemyFireTimer = randRange(EnemyFireMin, EnemyFireMax);
     }
 }
 
@@ -486,7 +486,7 @@ void drawOverlay() {
     SDL_RenderFillRect(Engine::renderer, &bar);
 
     if (G->awaitingRestart || G->promptActive) {
-        SDL_SetRenderDrawColor(Engine::renderer, 0, 0, 0, static_cast<Uint8>(kPromptAlpha));
+        SDL_SetRenderDrawColor(Engine::renderer, 0, 0, 0, static_cast<Uint8>(PromptAlpha));
         SDL_FRect backdrop{Engine::WINDOW_WIDTH * 0.15f, Engine::WINDOW_HEIGHT * 0.4f,
                            Engine::WINDOW_WIDTH * 0.7f, 120.0f};
         SDL_RenderFillRect(Engine::renderer, &backdrop);
@@ -497,9 +497,9 @@ void drawOverlay() {
             for (size_t r = 0; r < lines.size(); ++r) {
                 for (size_t c = 0; c < lines[r].size(); ++c) {
                     if (lines[r][c] != ' ') {
-                        SDL_FRect px{ x + float(c * kPromptPixelSize),
-                                      y + float(r * kPromptPixelSize),
-                                      float(kPromptPixelSize), float(kPromptPixelSize) };
+                        SDL_FRect px{ x + float(c * PromptPixelSize),
+                                      y + float(r * PromptPixelSize),
+                                      float(PromptPixelSize), float(PromptPixelSize) };
                         SDL_RenderFillRect(Engine::renderer, &px);
                     }
                 }
@@ -511,8 +511,8 @@ void drawOverlay() {
             "# PRESS Y TO PLAY AGAIN #   # PRESS ESC TO QUIT GAME   #",
             "#######################   ###############################"
         };
-        float textW = float(msg[0].size() * kPromptPixelSize);
-        float textH = float(msg.size() * kPromptPixelSize);
+        float textW = float(msg[0].size() * PromptPixelSize);
+        float textH = float(msg.size() * PromptPixelSize);
         float tx = Engine::WINDOW_WIDTH * 0.5f - textW * 0.5f;
         float ty = Engine::WINDOW_HEIGHT * 0.45f - textH * 0.5f;
         drawLines(tx, ty, msg);
@@ -538,7 +538,7 @@ void buildScene() {
     rng.seed(SDL_GetTicks());
     G = &state;
 
-    Engine::Memory::MemoryManager::instance().configurePool<Invader>(kRows * kCols + 4);
+    Engine::Memory::MemoryManager::instance().configurePool<Invader>(Rows * Cols + 4);
     Engine::Memory::MemoryManager::instance().configurePool<Bullet>(64);
     Engine::Memory::MemoryManager::instance().configurePool<EnemyBullet>(64);
     Engine::Memory::MemoryManager::instance().configurePool<Explosion>(64);
