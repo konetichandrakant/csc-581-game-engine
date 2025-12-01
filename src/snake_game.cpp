@@ -15,8 +15,8 @@
 constexpr int   kGridCols          = 26;
 constexpr int   kGridRows          = 18;
 constexpr float kCellSize          = 32.0f;
-constexpr float kBaseStepInterval  = 0.38f;
-constexpr float kMinStepInterval   = 0.12f;
+constexpr float kBaseStepInterval  = 0.45f;
+constexpr float kMinStepInterval   = 0.14f;
 constexpr float kGridBorder        = 8.0f;
 constexpr float kPromptAlpha       = 200.0f;
 constexpr int   kPromptPixelSize   = 6;
